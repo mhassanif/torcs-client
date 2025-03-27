@@ -3,8 +3,7 @@ import carState
 import carControl
 import keyboard
 import time
-from datetime import datetime
-from dataLogger import DataLogger
+from data_logger import DataLogger
 
 class Driver(object):
     '''
@@ -13,7 +12,6 @@ class Driver(object):
 
     def __init__(self, stage):
         '''Constructor'''
-       
         self.WARM_UP = 0
         self.QUALIFYING = 1
         self.RACE = 2
@@ -21,9 +19,10 @@ class Driver(object):
         self.stage = stage
         
         self.parser = msgParser.MsgParser()
+        
         self.state = carState.CarState()
+        
         self.control = carControl.CarControl()
-        self.logger = DataLogger()  # Initialize data logger
         
         self.steer_lock = 0.785398
         self.max_speed = 100
@@ -39,6 +38,9 @@ class Driver(object):
         self.accel_value = 0.0
         self.brake_value = 0.0
         self.is_reverse = False
+        
+        # Initialize data logger
+        self.logger = None
         
         # Set up keyboard event handlers
         keyboard.on_press_key('a', lambda _: self.handle_steering('left'))
@@ -69,51 +71,16 @@ class Driver(object):
         self.state.setFromMsg(msg)
         
         self.steer()
+        
         self.gear()
+        
         self.speed()
         
-        # Log telemetry data
-        telemetry_data = {
-            'timestamp': datetime.now().isoformat(),
-            'speedX': self.state.speedX,
-            'speedY': self.state.speedY,
-            'speedZ': self.state.speedZ,
-            'rpm': self.state.rpm,
-            'gear': self.state.gear,
-            'angle': self.state.angle,
-            'trackPos': self.state.trackPos,
-            'damage': self.state.damage,
-            'distFromStart': self.state.distFromStart,
-            'distRaced': self.state.distRaced,
-            'racePos': self.state.racePos,
-            'accel': self.control.getAccel(),
-            'brake': self.control.getBrake(),
-            'steer': self.control.getSteer(),
-            'clutch': self.control.getClutch(),
-            'fuel': self.state.fuel,
-            'curLapTime': self.state.curLapTime,
-            'lastLapTime': self.state.lastLapTime,
-            'z': self.state.z
-        }
-        
-        # Add track sensors
-        if hasattr(self.state, 'track') and self.state.track is not None:
-            for i in range(min(19, len(self.state.track))):
-                telemetry_data[f'track_{i}'] = self.state.track[i]
-        
-        # Add opponent sensors
-        if hasattr(self.state, 'opponents') and self.state.opponents is not None:
-            for i in range(min(36, len(self.state.opponents))):
-                telemetry_data[f'opponent_{i}'] = self.state.opponents[i]
-        
-        # Add wheel spin velocities
-        if hasattr(self.state, 'wheelSpinVel') and self.state.wheelSpinVel is not None and len(self.state.wheelSpinVel) >= 4:
-            telemetry_data['wheelSpinVel_FL'] = self.state.wheelSpinVel[0]
-            telemetry_data['wheelSpinVel_FR'] = self.state.wheelSpinVel[1]
-            telemetry_data['wheelSpinVel_RL'] = self.state.wheelSpinVel[2]
-            telemetry_data['wheelSpinVel_RR'] = self.state.wheelSpinVel[3]
-        
-        self.logger.log_data(telemetry_data)
+        # Log data if logger is initialized
+        if self.logger:
+            self.logger.log_data(self.state, self.control, 
+                               self.state.getTrackName() if hasattr(self.state, 'getTrackName') else 'unknown',
+                               self.get_race_type())
         
         return self.control.toMsg()
     
@@ -210,13 +177,28 @@ class Driver(object):
         else:
             self.control.setBrake(0.0)
     
+    def get_race_type(self):
+        """Convert stage number to race type string"""
+        if self.stage == self.WARM_UP:
+            return 'warmup'
+        elif self.stage == self.QUALIFYING:
+            return 'qualifying'
+        elif self.stage == self.RACE:
+            return 'race'
+        else:
+            return 'unknown'
+    
     def onShutDown(self):
-        self.logger.stop_logging()
+        """Called when the race is shutting down"""
+        if self.logger:
+            self.logger.close()
     
     def onRestart(self):
-        self.logger.stop_logging()
-        self.logger.start_logging()
-
+        """Called when the race is restarting"""
+        if self.logger:
+            self.logger.close()
+            self.logger = None
+    
     def handle_steering(self, direction, release=False):
         if direction == 'left':
             if release:

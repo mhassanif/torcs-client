@@ -2,8 +2,7 @@ import sys
 import argparse
 import socket
 import driver
-
-import atexit
+from data_logger import DataLogger
 
 if __name__ == '__main__':
     pass
@@ -53,9 +52,6 @@ verbose = False
 
 d = driver.Driver(arguments.stage)
 
-# Register cleanup function
-atexit.register(d.onShutDown)
-
 while not shutdownClient:
     while True:
         print(f'Sending id to server: {arguments.id}')
@@ -76,6 +72,11 @@ while not shutdownClient:
     
         if '***identified***' in buf:
             print(f'Received: {buf}')
+            # Initialize logger when race starts
+            d.logger = DataLogger(arguments.track or 'unknown', 
+                                'warmup' if arguments.stage == 0 else 
+                                'qualifying' if arguments.stage == 1 else 
+                                'race' if arguments.stage == 2 else 'unknown')
             break
 
     currentStep = 0

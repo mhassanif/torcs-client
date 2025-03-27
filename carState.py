@@ -27,6 +27,7 @@ class CarState(object):
         self.speedZ = None
         self.track = None
         self.trackPos = None
+        self.trackEdgeDist = None
         self.wheelSpinVel = None
         self.z = None
     
@@ -50,6 +51,7 @@ class CarState(object):
         self.setSpeedZD()
         self.setTrackD()
         self.setTrackPosD()
+        self.setTrackEdgeDistD()
         self.setWheelSpinVelD()
         self.setZD()
     
@@ -73,6 +75,7 @@ class CarState(object):
         self.sensors['speedZ'] = [self.speedZ]
         self.sensors['track'] = self.track
         self.sensors['trackPos'] = [self.trackPos]
+        self.sensors['trackEdgeDist'] = [self.trackEdgeDist]
         self.sensors['wheelSpinVel'] = self.wheelSpinVel
         self.sensors['z'] = [self.z]
         
@@ -189,6 +192,9 @@ class CarState(object):
     def setLastLapTimeD(self):
         self.lastLapTime = self.getFloatD('lastLapTime')
     
+    def getLastLapTime(self):
+        return self.lastLapTime
+    
     def setOpponents(self, opponents):
         self.opponents = opponents
         
@@ -260,6 +266,15 @@ class CarState(object):
     
     def getTrackPos(self):
         return self.trackPos
+    
+    def setTrackEdgeDist(self, trackEdgeDist):
+        self.trackEdgeDist = trackEdgeDist
+    
+    def setTrackEdgeDistD(self):
+        self.trackEdgeDist = self.getFloatD('trackEdgeDist')
+    
+    def getTrackEdgeDist(self):
+        return self.trackEdgeDist
     
     def setWheelSpinVel(self, wheelSpinVel):
         self.wheelSpinVel = wheelSpinVel
