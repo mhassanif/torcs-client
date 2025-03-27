@@ -7,7 +7,7 @@ if __name__ == '__main__':
     pass
 
 # Configure the argument parser
-parser = argparse.ArgumentParser(description = 'Python client to connect to the TORCS SCRC server.')
+parser = argparse.ArgumentParser(description='Python client to connect to the TORCS SCRC server.')
 
 parser.add_argument('--host', action='store', dest='host_ip', default='localhost',
                     help='Host IP address (default: localhost)')
@@ -27,18 +27,18 @@ parser.add_argument('--stage', action='store', dest='stage', type=int, default=3
 arguments = parser.parse_args()
 
 # Print summary
-print 'Connecting to server host ip:', arguments.host_ip, '@ port:', arguments.host_port
-print 'Bot ID:', arguments.id
-print 'Maximum episodes:', arguments.max_episodes
-print 'Maximum steps:', arguments.max_steps
-print 'Track:', arguments.track
-print 'Stage:', arguments.stage
-print '*********************************************'
+print(f'Connecting to server host ip: {arguments.host_ip} @ port: {arguments.host_port}')
+print(f'Bot ID: {arguments.id}')
+print(f'Maximum episodes: {arguments.max_episodes}')
+print(f'Maximum steps: {arguments.max_steps}')
+print(f'Track: {arguments.track}')
+print(f'Stage: {arguments.stage}')
+print('*********************************************')
 
 try:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-except socket.error, msg:
-    print 'Could not make a socket.'
+except socket.error as msg:
+    print('Could not make a socket.')
     sys.exit(-1)
 
 # one second timeout
@@ -53,23 +53,24 @@ d = driver.Driver(arguments.stage)
 
 while not shutdownClient:
     while True:
-        print 'Sending id to server: ', arguments.id
+        print(f'Sending id to server: {arguments.id}')
         buf = arguments.id + d.init()
-        print 'Sending init string to server:', buf
+        print(f'Sending init string to server: {buf}')
         
         try:
-            sock.sendto(buf, (arguments.host_ip, arguments.host_port))
-        except socket.error, msg:
-            print "Failed to send data...Exiting..."
+            sock.sendto(buf.encode(), (arguments.host_ip, arguments.host_port))
+        except socket.error as msg:
+            print("Failed to send data...Exiting...")
             sys.exit(-1)
             
         try:
             buf, addr = sock.recvfrom(1000)
-        except socket.error, msg:
-            print "didn't get response from server..."
+            buf = buf.decode()
+        except socket.error as msg:
+            print("Didn't get response from server...")
     
-        if buf.find('***identified***') >= 0:
-            print 'Received: ', buf
+        if '***identified***' in buf:
+            print(f'Received: {buf}')
             break
 
     currentStep = 0
@@ -79,38 +80,39 @@ while not shutdownClient:
         buf = None
         try:
             buf, addr = sock.recvfrom(1000)
-        except socket.error, msg:
-            print "didn't get response from server..."
+            buf = buf.decode()
+        except socket.error as msg:
+            print("Didn't get response from server...")
         
         if verbose:
-            print 'Received: ', buf
+            print(f'Received: {buf}')
         
-        if buf != None and buf.find('***shutdown***') >= 0:
+        if buf and '***shutdown***' in buf:
             d.onShutDown()
             shutdownClient = True
-            print 'Client Shutdown'
+            print('Client Shutdown')
             break
         
-        if buf != None and buf.find('***restart***') >= 0:
+        if buf and '***restart***' in buf:
             d.onRestart()
-            print 'Client Restart'
+            print('Client Restart')
             break
         
         currentStep += 1
         if currentStep != arguments.max_steps:
-            if buf != None:
+            if buf:
                 buf = d.drive(buf)
         else:
             buf = '(meta 1)'
         
         if verbose:
-            print 'Sending: ', buf
+            print(f'Sending: {buf}')
         
-        if buf != None:
+        if buf:
             try:
-                sock.sendto(buf, (arguments.host_ip, arguments.host_port))
-            except socket.error, msg:
-                print "Failed to send data...Exiting..."
+                sock.sendto(buf.encode(), (arguments.host_ip, arguments.host_port))
+            except socket.error as msg:
+                print("Failed to send data...Exiting...")
                 sys.exit(-1)
     
     curEpisode += 1
