@@ -3,6 +3,8 @@ import argparse
 import socket
 import driver
 
+import atexit
+
 if __name__ == '__main__':
     pass
 
@@ -50,6 +52,9 @@ curEpisode = 0
 verbose = False
 
 d = driver.Driver(arguments.stage)
+
+# Register cleanup function
+atexit.register(d.onShutDown)
 
 while not shutdownClient:
     while True:

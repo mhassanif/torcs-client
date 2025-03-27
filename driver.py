@@ -3,6 +3,8 @@ import carState
 import carControl
 import keyboard
 import time
+from datetime import datetime
+from dataLogger import DataLogger
 
 class Driver(object):
     '''
@@ -11,6 +13,7 @@ class Driver(object):
 
     def __init__(self, stage):
         '''Constructor'''
+       
         self.WARM_UP = 0
         self.QUALIFYING = 1
         self.RACE = 2
@@ -18,10 +21,9 @@ class Driver(object):
         self.stage = stage
         
         self.parser = msgParser.MsgParser()
-        
         self.state = carState.CarState()
-        
         self.control = carControl.CarControl()
+        self.logger = DataLogger()  # Initialize data logger
         
         self.steer_lock = 0.785398
         self.max_speed = 100
@@ -67,10 +69,51 @@ class Driver(object):
         self.state.setFromMsg(msg)
         
         self.steer()
-        
         self.gear()
-        
         self.speed()
+        
+        # Log telemetry data
+        telemetry_data = {
+            'timestamp': datetime.now().isoformat(),
+            'speedX': self.state.speedX,
+            'speedY': self.state.speedY,
+            'speedZ': self.state.speedZ,
+            'rpm': self.state.rpm,
+            'gear': self.state.gear,
+            'angle': self.state.angle,
+            'trackPos': self.state.trackPos,
+            'damage': self.state.damage,
+            'distFromStart': self.state.distFromStart,
+            'distRaced': self.state.distRaced,
+            'racePos': self.state.racePos,
+            'accel': self.control.getAccel(),
+            'brake': self.control.getBrake(),
+            'steer': self.control.getSteer(),
+            'clutch': self.control.getClutch(),
+            'fuel': self.state.fuel,
+            'curLapTime': self.state.curLapTime,
+            'lastLapTime': self.state.lastLapTime,
+            'z': self.state.z
+        }
+        
+        # Add track sensors
+        if hasattr(self.state, 'track') and self.state.track is not None:
+            for i in range(min(19, len(self.state.track))):
+                telemetry_data[f'track_{i}'] = self.state.track[i]
+        
+        # Add opponent sensors
+        if hasattr(self.state, 'opponents') and self.state.opponents is not None:
+            for i in range(min(36, len(self.state.opponents))):
+                telemetry_data[f'opponent_{i}'] = self.state.opponents[i]
+        
+        # Add wheel spin velocities
+        if hasattr(self.state, 'wheelSpinVel') and self.state.wheelSpinVel is not None and len(self.state.wheelSpinVel) >= 4:
+            telemetry_data['wheelSpinVel_FL'] = self.state.wheelSpinVel[0]
+            telemetry_data['wheelSpinVel_FR'] = self.state.wheelSpinVel[1]
+            telemetry_data['wheelSpinVel_RL'] = self.state.wheelSpinVel[2]
+            telemetry_data['wheelSpinVel_RR'] = self.state.wheelSpinVel[3]
+        
+        self.logger.log_data(telemetry_data)
         
         return self.control.toMsg()
     
@@ -168,10 +211,11 @@ class Driver(object):
             self.control.setBrake(0.0)
     
     def onShutDown(self):
-        pass
+        self.logger.stop_logging()
     
     def onRestart(self):
-        pass
+        self.logger.stop_logging()
+        self.logger.start_logging()
 
     def handle_steering(self, direction, release=False):
         if direction == 'left':
