@@ -5,18 +5,15 @@ class CarState(object):
     Class that hold all the car state variables
     '''
 
-
     def __init__(self):
         '''Constructor'''
         self.parser = msgParser.MsgParser()
         self.sensors = None
         self.angle = None
         self.curLapTime = None
-        self.damage = None
         self.distFromStart = None
         self.distRaced = None
         self.focus = None
-        self.fuel = None
         self.gear = None
         self.lastLapTime = None
         self.opponents = None
@@ -36,11 +33,9 @@ class CarState(object):
         
         self.setAngleD()
         self.setCurLapTimeD()
-        self.setDamageD()
         self.setDistFromStartD()
         self.setDistRacedD()
         self.setFocusD()
-        self.setFuelD()
         self.setGearD()
         self.setLastLapTimeD()
         self.setOpponentsD()
@@ -60,11 +55,9 @@ class CarState(object):
         
         self.sensors['angle'] = [self.angle]
         self.sensors['curLapTime'] = [self.curLapTime]
-        self.sensors['damage'] = [self.damage]
         self.sensors['distFromStart'] = [self.distFromStart]
         self.sensors['distRaced'] = [self.distRaced]
         self.sensors['focus'] = self.focus
-        self.sensors['fuel'] = [self.fuel]
         self.sensors['gear'] = [self.gear]
         self.sensors['lastLapTime'] = [self.lastLapTime]
         self.sensors['opponents'] = self.opponents
@@ -135,15 +128,6 @@ class CarState(object):
     def getCurLapTime(self):
         return self.curLapTime
     
-    def setDamage(self, damage):
-        self.damage = damage
-    
-    def setDamageD(self):
-        self.damage = self.getFloatD('damage')
-        
-    def getDamage(self):
-        return self.damage
-    
     def setDistFromStart(self, distFromStart):
         self.distFromStart = distFromStart
     
@@ -167,15 +151,6 @@ class CarState(object):
     
     def setFocusD(self):
         self.focus = self.getFloatListD('focus')
-    
-    def setFuel(self, fuel):
-        self.fuel = fuel
-    
-    def setFuelD(self):
-        self.fuel = self.getFloatD('fuel')
-    
-    def getFuel(self):
-        return self.fuel
     
     def setGear(self, gear):
         self.gear = gear

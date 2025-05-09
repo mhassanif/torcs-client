@@ -19,11 +19,10 @@ class Driver(object):
         self.stage = stage
         
         self.parser = msgParser.MsgParser()
-        
         self.state = carState.CarState()
-        
         self.control = carControl.CarControl()
         
+        # Simplified steering and speed parameters
         self.steer_lock = 0.785398
         self.max_speed = 100
         self.prev_rpm = None
@@ -41,6 +40,13 @@ class Driver(object):
         
         # Initialize data logger
         self.logger = None
+        
+        # Track-specific parameters
+        self.track_params = {
+            'G-Speedway': {'max_speed': 120, 'steer_lock': 0.785398},  # Oval track
+            'E-Track3': {'max_speed': 100, 'steer_lock': 0.785398},    # Road track
+            'Dirt2': {'max_speed': 80, 'steer_lock': 0.785398}         # Dirt track
+        }
         
         # Set up keyboard event handlers
         keyboard.on_press_key('a', lambda _: self.handle_steering('left'))
@@ -70,10 +76,16 @@ class Driver(object):
     def drive(self, msg):
         self.state.setFromMsg(msg)
         
+        # Update track-specific parameters if track name is available
+        if hasattr(self.state, 'getTrackName'):
+            track_name = self.state.getTrackName()
+            if track_name in self.track_params:
+                params = self.track_params[track_name]
+                self.max_speed = params['max_speed']
+                self.steer_lock = params['steer_lock']
+        
         self.steer()
-        
         self.gear()
-        
         self.speed()
         
         # Log data if logger is initialized

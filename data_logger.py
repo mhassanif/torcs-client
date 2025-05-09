@@ -12,13 +12,13 @@ class DataLogger:
         # Use a single file for all races
         self.filename = 'logs/race_data.csv'
         
-        # Define CSV headers
+        # Define CSV headers - simplified based on new scope
         self.headers = [
             # Race information
             'timestamp', 'lap_number', 'lap_time', 'race_position',
             
-            # Car state
-            'speed_x', 'speed_y', 'speed_z', 'rpm', 'gear', 'fuel',
+            # Car state (removed fuel and damage)
+            'speed_x', 'speed_y', 'speed_z', 'rpm', 'gear',
             'angle', 'track_position', 'track_edge_dist',
             
             # Track sensors (19 values)
@@ -42,8 +42,8 @@ class DataLogger:
             # Car control inputs
             'accel', 'brake', 'steer', 'clutch',
             
-            # Race metadata
-            'track_name', 'race_type', 'damage', 'distance_from_start', 'distance_raced',
+            # Race metadata (removed damage and fuel)
+            'track_name', 'race_type', 'distance_from_start', 'distance_raced',
             
             # Race session info
             'session_id', 'session_start_time'
@@ -71,14 +71,14 @@ class DataLogger:
             self.current_lap += 1
             self.last_lap_time = car_state.getLastLapTime()
         
-        # Prepare row data
+        # Prepare row data - simplified based on new scope
         row_data = [
             # Race information
             current_time, self.current_lap, car_state.getLastLapTime(), car_state.getRacePos(),
             
-            # Car state
+            # Car state (removed fuel and damage)
             car_state.getSpeedX(), car_state.getSpeedY(), car_state.getSpeedZ(),
-            car_state.getRpm(), car_state.getGear(), car_state.getFuel(),
+            car_state.getRpm(), car_state.getGear(),
             car_state.getAngle(), car_state.getTrackPos(), car_state.getTrackEdgeDist(),
             
             # Track sensors
@@ -90,8 +90,8 @@ class DataLogger:
             # Car control inputs
             car_control.getAccel(), car_control.getBrake(), car_control.getSteer(), car_control.getClutch(),
             
-            # Race metadata
-            track_name, race_type, car_state.getDamage(),
+            # Race metadata (removed damage and fuel)
+            track_name, race_type,
             car_state.getDistFromStart(), car_state.getDistRaced(),
             
             # Session info
