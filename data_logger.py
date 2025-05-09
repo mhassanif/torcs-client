@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 
 class DataLogger:
-    def __init__(self, track_name, race_type):
+    def __init__(self, track_name, race_type, car_type='unknown'):
         # Create logs directory if it doesn't exist
         if not os.path.exists('logs'):
             os.makedirs('logs')
@@ -43,7 +43,7 @@ class DataLogger:
             'accel', 'brake', 'steer', 'clutch',
             
             # Race metadata (removed damage and fuel)
-            'track_name', 'race_type', 'distance_from_start', 'distance_raced',
+            'track_name', 'race_type', 'car_type', 'distance_from_start', 'distance_raced',
             
             # Race session info
             'session_id', 'session_start_time'
@@ -58,6 +58,7 @@ class DataLogger:
         self.start_time = time.time()
         self.last_lap_time = 0
         self.current_lap = 0
+        self.car_type = car_type
         
         # Generate a unique session ID for this race
         self.session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -91,7 +92,7 @@ class DataLogger:
             car_control.getAccel(), car_control.getBrake(), car_control.getSteer(), car_control.getClutch(),
             
             # Race metadata (removed damage and fuel)
-            track_name, race_type,
+            track_name, race_type, self.car_type,
             car_state.getDistFromStart(), car_state.getDistRaced(),
             
             # Session info

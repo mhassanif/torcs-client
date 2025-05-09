@@ -3,20 +3,23 @@ import carState
 import carControl
 import keyboard
 import time
+import numpy as np
 from data_logger import DataLogger
+from model_trainer import TORCSModelTrainer
 
 class Driver(object):
     '''
     A driver object for the SCRC
     '''
 
-    def __init__(self, stage):
+    def __init__(self, stage, car_type='unknown'):
         '''Constructor'''
         self.WARM_UP = 0
         self.QUALIFYING = 1
         self.RACE = 2
         self.UNKNOWN = 3
         self.stage = stage
+        self.car_type = car_type
         
         self.parser = msgParser.MsgParser()
         self.state = carState.CarState()
@@ -40,6 +43,10 @@ class Driver(object):
         
         # Initialize data logger
         self.logger = None
+        
+        # Initialize model trainer and load models
+        self.model_trainer = TORCSModelTrainer()
+        self.model_trainer.load_models()
         
         # Track-specific parameters
         self.track_params = {
@@ -73,6 +80,52 @@ class Driver(object):
         
         return self.parser.stringify({'init': self.angles})
     
+    def prepare_features_for_prediction(self):
+        """Prepare current state features for model prediction"""
+        features = [
+            self.state.getSpeedX(),
+            self.state.getSpeedY(),
+            self.state.getSpeedZ(),
+            self.state.getRpm(),
+            self.state.getGear(),
+            self.state.getAngle(),
+            self.state.getTrackPos(),
+            self.state.getTrackEdgeDist()
+        ]
+        
+        # Add track sensors
+        features.extend(self.state.getTrack())
+        
+        # Add opponent sensors
+        features.extend(self.state.getOpponents())
+        
+        return np.array(features).reshape(1, -1)
+    
+    def predict_controls(self, features):
+        """Predict control actions using XGBoost models"""
+        predictions = {}
+        
+        for action in ['steer', 'accel', 'brake']:
+            if self.model_trainer.models[action] is not None:
+                try:
+                    # Scale features
+                    features_scaled = self.model_trainer.scalers[action].transform(features)
+                    # Predict
+                    pred = self.model_trainer.models[action].predict(features_scaled)[0]
+                    # Clamp predictions to valid ranges
+                    if action == 'steer':
+                        pred = max(min(pred, 1.0), -1.0)
+                    else:  # accel and brake
+                        pred = max(min(pred, 1.0), 0.0)
+                    predictions[action] = pred
+                except Exception as e:
+                    print(f"Error predicting {action}: {e}")
+                    predictions[action] = None
+            else:
+                predictions[action] = None
+        
+        return predictions
+    
     def drive(self, msg):
         self.state.setFromMsg(msg)
         
@@ -84,9 +137,30 @@ class Driver(object):
                 self.max_speed = params['max_speed']
                 self.steer_lock = params['steer_lock']
         
-        self.steer()
-        self.gear()
-        self.speed()
+        # Try to use model predictions if available
+        if not any([self.external_steer, self.external_accel, self.external_brake]):
+            features = self.prepare_features_for_prediction()
+            predictions = self.predict_controls(features)
+            
+            if predictions['steer'] is not None:
+                self.control.setSteer(predictions['steer'])
+            else:
+                self.steer()
+            
+            if predictions['accel'] is not None:
+                self.control.setAccel(predictions['accel'])
+            else:
+                self.speed()
+            
+            if predictions['brake'] is not None:
+                self.control.setBrake(predictions['brake'])
+            else:
+                self.speed()
+        else:
+            # Use manual/external controls if available
+            self.steer()
+            self.gear()
+            self.speed()
         
         # Log data if logger is initialized
         if self.logger:
