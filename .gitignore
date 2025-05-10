@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.pip-wheel-metadata/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and output data
+*.out
+*.err
+
+
+# Results and analysis
+*.npy
+*.npz
+
+# VS Code / PyCharm config
+.vscode/
+.idea/
+
+# OS metadata files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# TORCS runtime files (if any generated)
+*.so
+*.bin
+*.a
+
+# Test cache
+.cache/
+.pytest_cache/
+
+# Ignore personal config or secrets (if any)
+*.env
+.env.*
+secrets.*

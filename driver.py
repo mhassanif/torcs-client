@@ -6,6 +6,7 @@ import time
 import numpy as np
 from data_logger import DataLogger
 from model_trainer import TORCSModelTrainer
+import pandas as pd
 
 class Driver(object):
     '''
@@ -46,14 +47,40 @@ class Driver(object):
         
         # Initialize model trainer and load models
         self.model_trainer = TORCSModelTrainer()
+        print("Loading models from models directory...")
         self.model_trainer.load_models()
         
-        # Track-specific parameters
-        self.track_params = {
-            'G-Speedway': {'max_speed': 120, 'steer_lock': 0.785398},  # Oval track
-            'E-Track3': {'max_speed': 100, 'steer_lock': 0.785398},    # Road track
-            'Dirt2': {'max_speed': 80, 'steer_lock': 0.785398}         # Dirt track
+        # Define feature columns to match model trainer
+        self.feature_columns = [
+            'Angle', 'CurrentLapTime', 'DistanceFromStart', 'DistanceCovered',
+            'Gear', 'LastLapTime', 'RacePosition', 'RPM', 'SpeedX', 'SpeedY',
+            'SpeedZ', 'TrackPosition', 'Z'
+        ]
+        
+        # Add track sensors
+        self.feature_columns.extend([f'Track_{i}' for i in range(1, 20)])
+        
+        # Add opponent sensors
+        self.feature_columns.extend([f'Opponent_{i}' for i in range(1, 37)])
+        
+        # Add wheel spin velocities
+        self.feature_columns.extend([f'WheelSpinVelocity_{i}' for i in range(1, 5)])
+        
+        # Track mapping and parameters
+        self.track_mapping = {
+            'G-Speedway': 'oval',
+            'E-Track3': 'road',
+            'Dirt2': 'road'  # Temporarily map dirt tracks to road models until dirt models are available
         }
+        
+        self.track_params = {
+            'oval': {'max_speed': 120, 'steer_lock': 0.785398},
+            'road': {'max_speed': 100, 'steer_lock': 0.785398},
+            # 'dirt': {'max_speed': 80, 'steer_lock': 0.785398}  # Commented out until models are available
+        }
+        
+        # Current track type
+        self.current_track_type = None
         
         # Set up keyboard event handlers
         keyboard.on_press_key('a', lambda _: self.handle_steering('left'))
@@ -81,47 +108,83 @@ class Driver(object):
         return self.parser.stringify({'init': self.angles})
     
     def prepare_features_for_prediction(self):
-        """Prepare current state features for model prediction"""
-        features = [
-            self.state.getSpeedX(),
-            self.state.getSpeedY(),
-            self.state.getSpeedZ(),
-            self.state.getRpm(),
-            self.state.getGear(),
-            self.state.getAngle(),
-            self.state.getTrackPos(),
-            self.state.getTrackEdgeDist()
-        ]
+        """Prepare features for model prediction"""
+        features = {
+            'Angle': self.state.getAngle(),
+            'CurrentLapTime': self.state.getCurLapTime(),
+            'DistanceFromStart': self.state.getDistFromStart(),
+            'DistanceCovered': self.state.getDistRaced(),
+            'Gear': self.state.getGear(),
+            'LastLapTime': self.state.getLastLapTime(),
+            'RacePosition': self.state.getRacePos(),
+            'RPM': self.state.getRpm(),
+            'SpeedX': self.state.getSpeedX(),
+            'SpeedY': self.state.getSpeedY(),
+            'SpeedZ': self.state.getSpeedZ(),
+            'TrackPosition': self.state.getTrackPos(),
+            'Z': self.state.getZ()
+        }
         
-        # Add track sensors
-        features.extend(self.state.getTrack())
+        # Add track sensors - getTrack() returns the entire array
+        track_sensors = self.state.getTrack()
+        if track_sensors is not None:
+            for i, value in enumerate(track_sensors, 1):
+                features[f'Track_{i}'] = value
         
-        # Add opponent sensors
-        features.extend(self.state.getOpponents())
+        # Add opponent sensors - getOpponents() returns the entire array
+        opponent_sensors = self.state.getOpponents()
+        if opponent_sensors is not None:
+            for i, value in enumerate(opponent_sensors, 1):
+                features[f'Opponent_{i}'] = value
         
-        return np.array(features).reshape(1, -1)
+        # Add wheel spin velocities - getWheelSpinVel() returns the entire array
+        wheel_sensors = self.state.getWheelSpinVel()
+        if wheel_sensors is not None:
+            for i, value in enumerate(wheel_sensors, 1):
+                features[f'WheelSpinVelocity_{i}'] = value
+        
+        print(f"\nDebug - Number of features prepared: {len(features)}")
+        print(f"Debug - Expected feature columns: {len(self.feature_columns)}")
+        print(f"Debug - Missing features: {set(self.feature_columns) - set(features.keys())}")
+        
+        # Convert to numpy array
+        feature_values = np.array([features[col] for col in self.feature_columns])
+        return feature_values.reshape(1, -1)
     
     def predict_controls(self, features):
-        """Predict control actions using XGBoost models"""
+        """Predict control actions using track-specific XGBoost models"""
         predictions = {}
         
+        if self.current_track_type is None:
+            print("Warning: No track type detected, using default models")
+            track_type = 'road'  # Default to road track
+        else:
+            track_type = self.current_track_type
+            print(f"Using models for {track_type} track")
+        
+        print(f"\nDebug - Features shape before scaling: {features.shape}")
+        
         for action in ['steer', 'accel', 'brake']:
-            if self.model_trainer.models[action] is not None:
+            if self.model_trainer.models[track_type][action] is not None:
                 try:
                     # Scale features
-                    features_scaled = self.model_trainer.scalers[action].transform(features)
+                    print(f"\nDebug - Scaler feature names: {self.model_trainer.scalers[track_type][action].feature_names_in_}")
+                    print(f"Debug - Number of features in scaler: {len(self.model_trainer.scalers[track_type][action].feature_names_in_)}")
+                    features_scaled = self.model_trainer.scalers[track_type][action].transform(features)
                     # Predict
-                    pred = self.model_trainer.models[action].predict(features_scaled)[0]
+                    pred = self.model_trainer.models[track_type][action].predict(features_scaled)[0]
                     # Clamp predictions to valid ranges
                     if action == 'steer':
                         pred = max(min(pred, 1.0), -1.0)
                     else:  # accel and brake
                         pred = max(min(pred, 1.0), 0.0)
                     predictions[action] = pred
+                    print(f"Predicted {action}: {pred:.3f}")
                 except Exception as e:
-                    print(f"Error predicting {action}: {e}")
+                    print(f"Error predicting {action} for {track_type} track: {e}")
                     predictions[action] = None
             else:
+                print(f"Warning: No {action} model available for {track_type} track")
                 predictions[action] = None
         
         return predictions
@@ -129,13 +192,21 @@ class Driver(object):
     def drive(self, msg):
         self.state.setFromMsg(msg)
         
-        # Update track-specific parameters if track name is available
+        # Update track type and parameters if track name is available
         if hasattr(self.state, 'getTrackName'):
             track_name = self.state.getTrackName()
-            if track_name in self.track_params:
-                params = self.track_params[track_name]
+            print(f"\nDebug - Track name from server: {track_name}")
+            print(f"Debug - Available track mappings: {self.track_mapping}")
+            if track_name in self.track_mapping:
+                self.current_track_type = self.track_mapping[track_name]
+                params = self.track_params[self.current_track_type]
                 self.max_speed = params['max_speed']
                 self.steer_lock = params['steer_lock']
+                print(f"Using {self.current_track_type} track models")
+            else:
+                print(f"Warning: Track '{track_name}' not found in track mapping")
+        else:
+            print("Warning: getTrackName not available in car state")
         
         # Try to use model predictions if available
         if not any([self.external_steer, self.external_accel, self.external_brake]):

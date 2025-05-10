@@ -48,9 +48,12 @@ sock.settimeout(1.0)
 shutdownClient = False
 curEpisode = 0
 
-verbose = False
+verbose = True  # Enable verbose mode to see all messages
 
 d = driver.Driver(arguments.stage)
+print("\nDebug - Driver initialized with stage:", arguments.stage)
+print("Debug - Track mapping:", d.track_mapping)
+print("Debug - Track parameters:", d.track_params)
 
 while not shutdownClient:
     while True:
@@ -71,12 +74,38 @@ while not shutdownClient:
             print("Didn't get response from server...")
     
         if '***identified***' in buf:
-            print(f'Received: {buf}')
-            # Initialize logger when race starts
-            d.logger = DataLogger(arguments.track or 'unknown', 
-                                'warmup' if arguments.stage == 0 else 
-                                'qualifying' if arguments.stage == 1 else 
-                                'race' if arguments.stage == 2 else 'unknown')
+            print(f'Received identification message: {buf}')
+            # Parse the identification message
+            try:
+                # Extract track name from the message if available
+                track_name = None
+                if '(track' in buf:
+                    track_start = buf.find('(track') + 6
+                    track_end = buf.find(')', track_start)
+                    if track_start > 6 and track_end > track_start:
+                        track_name = buf[track_start:track_end].strip()
+                        print(f"Found track name in identification message: {track_name}")
+                
+                # Use track name from identification message if available, otherwise use command line argument
+                track_name = track_name or arguments.track
+                print(f"Using track name: {track_name}")
+                
+                # Initialize logger when race starts
+                d.logger = DataLogger(track_name or 'unknown', 
+                                    'warmup' if arguments.stage == 0 else 
+                                    'qualifying' if arguments.stage == 1 else 
+                                    'race' if arguments.stage == 2 else 'unknown')
+                
+                # Set track name in car state
+                if track_name:
+                    print(f"Setting track name in car state: {track_name}")
+                    d.state.setTrackName(track_name)
+            except Exception as e:
+                print(f"Error parsing identification message: {e}")
+                # Fallback to command line argument
+                if arguments.track:
+                    print(f"Using track name from command line: {arguments.track}")
+                    d.state.setTrackName(arguments.track)
             break
 
     currentStep = 0

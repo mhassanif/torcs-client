@@ -27,6 +27,7 @@ class CarState(object):
         self.trackEdgeDist = None
         self.wheelSpinVel = None
         self.z = None
+        self.trackName = None
     
     def setFromMsg(self, str_sensors):
         self.sensors = self.parser.parse(str_sensors)
@@ -49,6 +50,7 @@ class CarState(object):
         self.setTrackEdgeDistD()
         self.setWheelSpinVelD()
         self.setZD()
+        self.setTrackNameD()
     
     def toMsg(self):
         self.sensors = {}
@@ -71,6 +73,7 @@ class CarState(object):
         self.sensors['trackEdgeDist'] = [self.trackEdgeDist]
         self.sensors['wheelSpinVel'] = self.wheelSpinVel
         self.sensors['z'] = [self.z]
+        self.sensors['trackName'] = [self.trackName]
         
         return self.parser.stringify(self.sensors)
     
@@ -268,5 +271,17 @@ class CarState(object):
     
     def getZ(self):
         return self.z
+    
+    def getTrackName(self):
+        return self.trackName
+    
+    def setTrackName(self, trackName):
+        self.trackName = trackName
+    
+    def setTrackNameD(self):
+        try:
+            self.trackName = self.sensors['trackName'][0]
+        except (KeyError, IndexError):
+            self.trackName = None
     
     
