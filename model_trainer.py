@@ -9,7 +9,7 @@ import os
 class TORCSModelTrainer:
     def __init__(self):
         # Only include tracks that have data for now
-        self.tracks = ['road', 'oval']  # Removed 'dirt' until data is available
+        self.tracks = ['road', 'oval', 'dirt']  # Removed 'dirt' until data is available
         self.models = {
             track: {
                 'steer': None,
@@ -48,28 +48,23 @@ class TORCSModelTrainer:
     
     def prepare_features(self, df):
         """Prepare feature set from raw data"""
-        # Define all possible features with exact column names from CSV
+        # Define only essential features
         all_features = [
-            'Angle', 'CurrentLapTime', 'DistanceFromStart', 'DistanceCovered',
-            'Gear', 'LastLapTime', 'RacePosition', 'RPM', 'SpeedX', 'SpeedY',
-            'SpeedZ', 'TrackPosition', 'Z'
+            'Angle',              # Car's angle relative to track
+            'CurrentLapTime',     # Current lap time
+            'DistanceFromStart',  # Distance from start line
+            'DistanceCovered',    # Total distance covered
+            'SpeedX',            # Longitudinal speed
+            'SpeedY',            # Lateral speed
+            'TrackPosition',      # Position relative to track center
+            'RPM'                # Engine RPM
         ]
         
-        # Add track sensors
+        # Add track sensors (these are crucial for navigation)
         all_features.extend([f'Track_{i}' for i in range(1, 20)])
-        
-        # Add opponent sensors
-        all_features.extend([f'Opponent_{i}' for i in range(1, 37)])
-        
-        # Add wheel spin velocities
-        all_features.extend([f'WheelSpinVelocity_{i}' for i in range(1, 5)])
         
         # Check which features are actually present in the dataframe
         available_features = [col for col in all_features if col in df.columns]
-        
-        print(f"\nDebug - Total features defined: {len(all_features)}")
-        print(f"Debug - Available features in CSV: {len(available_features)}")
-        print(f"Debug - Missing features: {set(all_features) - set(available_features)}")
         
         # Convert all columns to float
         for col in available_features:
@@ -143,15 +138,15 @@ class TORCSModelTrainer:
                 # Initialize and train model with optimized parameters
                 model = xgb.XGBRegressor(
                     objective='reg:squarederror',
-                    n_estimators=200,
-                    learning_rate=0.05,
-                    max_depth=6,
-                    min_child_weight=2,
-                    subsample=0.8,
-                    colsample_bytree=0.8,
-                    gamma=0.1,
-                    reg_alpha=0.1,
-                    reg_lambda=1,
+                    n_estimators=500,  # Increased from 200
+                    learning_rate=0.1,  # Increased from 0.05
+                    max_depth=8,        # Increased from 6
+                    min_child_weight=1, # Decreased from 2
+                    subsample=0.9,      # Increased from 0.8
+                    colsample_bytree=0.9, # Increased from 0.8
+                    gamma=0.05,         # Decreased from 0.1
+                    reg_alpha=0.05,     # Decreased from 0.1
+                    reg_lambda=0.5,     # Decreased from 1
                     random_state=42
                 )
                 
@@ -190,6 +185,13 @@ class TORCSModelTrainer:
                 feature_importance = feature_importance.sort_values('importance', ascending=False)
                 print(f"\nTop 10 important features for {track_name} {action}:")
                 print(feature_importance.head(10))
+                
+                # Print prediction statistics
+                print(f"\nPrediction statistics for {action}:")
+                print(f"Min prediction: {np.min(y_pred):.4f}")
+                print(f"Max prediction: {np.max(y_pred):.4f}")
+                print(f"Mean prediction: {np.mean(y_pred):.4f}")
+                print(f"Std prediction: {np.std(y_pred):.4f}")
                 
         except FileNotFoundError:
             print(f"Error: Could not find data file at {csv_path}")

@@ -24,15 +24,32 @@ parser.add_argument('--track', action='store', dest='track', default=None,
                     help='Name of the track')
 parser.add_argument('--stage', action='store', dest='stage', type=int, default=3,
                     help='Stage (0 - Warm-Up, 1 - Qualifying, 2 - Race, 3 - Unknown)')
+parser.add_argument('track_type', type=int, choices=[1, 2, 3],
+                    help='Track type (1=road, 2=oval, 3=dirt)')
+
+# Print raw arguments for debugging
+print("Raw command line arguments:", sys.argv)
 
 arguments = parser.parse_args()
 
+# Print parsed arguments for debugging
+print("\nParsed arguments:")
+print(f"Track type: {arguments.track_type}")
+print(f"All arguments: {vars(arguments)}")
+
+# Map track type number to track name
+track_type_map = {
+    1: 'road',
+    2: 'oval',
+    3: 'dirt'
+}
+
 # Print summary
-print(f'Connecting to server host ip: {arguments.host_ip} @ port: {arguments.host_port}')
+print(f'\nConnecting to server host ip: {arguments.host_ip} @ port: {arguments.host_port}')
 print(f'Bot ID: {arguments.id}')
 print(f'Maximum episodes: {arguments.max_episodes}')
 print(f'Maximum steps: {arguments.max_steps}')
-print(f'Track: {arguments.track}')
+print(f'Track type: {track_type_map[arguments.track_type]}')
 print(f'Stage: {arguments.stage}')
 print('*********************************************')
 
@@ -55,6 +72,10 @@ print("\nDebug - Driver initialized with stage:", arguments.stage)
 print("Debug - Track mapping:", d.track_mapping)
 print("Debug - Track parameters:", d.track_params)
 
+# Set the track type in the driver
+d.current_track_type = track_type_map[arguments.track_type]
+print(f"Using track type: {d.current_track_type}")
+
 while not shutdownClient:
     while True:
         print(f'Sending id to server: {arguments.id}')
@@ -75,37 +96,11 @@ while not shutdownClient:
     
         if '***identified***' in buf:
             print(f'Received identification message: {buf}')
-            # Parse the identification message
-            try:
-                # Extract track name from the message if available
-                track_name = None
-                if '(track' in buf:
-                    track_start = buf.find('(track') + 6
-                    track_end = buf.find(')', track_start)
-                    if track_start > 6 and track_end > track_start:
-                        track_name = buf[track_start:track_end].strip()
-                        print(f"Found track name in identification message: {track_name}")
-                
-                # Use track name from identification message if available, otherwise use command line argument
-                track_name = track_name or arguments.track
-                print(f"Using track name: {track_name}")
-                
-                # Initialize logger when race starts
-                d.logger = DataLogger(track_name or 'unknown', 
-                                    'warmup' if arguments.stage == 0 else 
-                                    'qualifying' if arguments.stage == 1 else 
-                                    'race' if arguments.stage == 2 else 'unknown')
-                
-                # Set track name in car state
-                if track_name:
-                    print(f"Setting track name in car state: {track_name}")
-                    d.state.setTrackName(track_name)
-            except Exception as e:
-                print(f"Error parsing identification message: {e}")
-                # Fallback to command line argument
-                if arguments.track:
-                    print(f"Using track name from command line: {arguments.track}")
-                    d.state.setTrackName(arguments.track)
+            # Initialize logger when race starts
+            d.logger = DataLogger(track_type_map[arguments.track_type], 
+                                'warmup' if arguments.stage == 0 else 
+                                'qualifying' if arguments.stage == 1 else 
+                                'race' if arguments.stage == 2 else 'unknown')
             break
 
     currentStep = 0
