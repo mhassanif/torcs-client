@@ -14,9 +14,13 @@ ENV/
 .ipynb_checkpoints/
 
 # Logs and output data
+*.log
+logs/
 *.out
 *.err
 
+# Data files and models
+*.csv
 
 # Results and analysis
 *.npy
