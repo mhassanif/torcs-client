@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import xgboost as xgb
+from sklearn.neural_network import MLPRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import joblib
@@ -15,7 +15,9 @@ class TORCSModelTrainer:
             track: {
                 'steer': None,
                 'accel': None,
-                'brake': None
+                'brake': None,
+                'clutch': None,
+                'gear': None
             } for track in self.tracks
         }
         # Single scaler per track
@@ -33,93 +35,175 @@ class TORCSModelTrainer:
             if not os.path.exists(track_dir):
                 os.makedirs(track_dir)
     
-    def check_csv_headers(self, csv_path):
-        """Check the headers of a CSV file"""
-        try:
-            df = pd.read_csv(csv_path, nrows=0)  # Only read headers
-            return df.columns.tolist()
-        except Exception as e:
-            print(f"Error reading CSV headers from {csv_path}: {str(e)}")
-            return None
-    
     def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Prepare feature set from raw data"""
-        # Define base features
-        base_features = [
-            'Angle',              # Car's angle relative to track
-            'SpeedX',            # Longitudinal speed
-            'SpeedY',            # Lateral speed
-            'TrackPosition',      # Position relative to track center
-            'RPM'                # Engine RPM
-        ]
-        
-        # Add track sensors
-        base_features.extend([f'Track_{i}' for i in range(1, 20)])
-        
-        # Check which features are actually present
-        available_features = [col for col in base_features if col in df.columns]
-        
-        # Convert all columns to float and handle NaN values
-        df = df[available_features].astype(float)
-        df = df.ffill().bfill()
-        
-        return df
+        try:
+            # Define features to use (excluding targets and ignored features)
+            feature_columns = [
+                'Angle', 'CurrentLapTime', 'DistanceFromStart', 
+                'DistanceCovered', 'RacePosition', 'RPM', 
+                'SpeedX', 'SpeedY', 'SpeedZ', 'TrackPosition', 'Z'
+            ]
+            
+            # Add opponent sensors
+            feature_columns.extend([f'Opponent_{i}' for i in range(1, 37)])
+            
+            # Add track sensors
+            feature_columns.extend([f'Track_{i}' for i in range(1, 20)])
+            
+            # Check which features are actually present
+            available_features = [col for col in feature_columns if col in df.columns]
+            if not available_features:
+                raise ValueError("No features found in the dataset")
+            
+            print(f"Using {len(available_features)} features out of {len(feature_columns)} defined features")
+            
+            # Convert all columns to float and handle NaN values
+            df = df[available_features].astype(float)
+            
+            # Check for and handle infinite values
+            if np.isinf(df.values).any():
+                print("Warning: Found infinite values, replacing with NaN")
+                df = df.replace([np.inf, -np.inf], np.nan)
+            
+            # Handle NaN values
+            nan_count = df.isna().sum().sum()
+            if nan_count > 0:
+                print(f"Warning: Found {nan_count} NaN values, filling with forward then backward fill")
+                df = df.ffill().bfill()
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error in prepare_features: {str(e)}")
+            raise
     
     def prepare_targets(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
         """Prepare target variables"""
-        # Map of internal names to CSV column names
-        target_columns = {
-            'steer': 'Steering',
-            'accel': 'Acceleration',
-            'brake': 'Braking'
-        }
+        try:
+            # Map of internal names to CSV column names
+            target_columns = {
+                'steer': 'Steering',
+                'accel': 'Acceleration',
+                'brake': 'Braking',
+                'clutch': 'Clutch',
+                'gear': 'Gear'
+            }
+            
+            # Convert target columns to float and handle NaN values
+            targets = {}
+            missing_targets = []
+            
+            for internal_name, csv_name in target_columns.items():
+                if csv_name not in df.columns:
+                    missing_targets.append(csv_name)
+                    continue
+                    
+                targets[internal_name] = pd.to_numeric(df[csv_name], errors='coerce')
+                
+                # Check for and handle infinite values
+                if np.isinf(targets[internal_name]).any():
+                    print(f"Warning: Found infinite values in {csv_name}, replacing with NaN")
+                    targets[internal_name] = targets[internal_name].replace([np.inf, -np.inf], np.nan)
+                
+                # Handle NaN values
+                nan_count = targets[internal_name].isna().sum()
+                if nan_count > 0:
+                    print(f"Warning: Found {nan_count} NaN values in {csv_name}, filling with forward then backward fill")
+                    targets[internal_name] = targets[internal_name].ffill().bfill()
+                
+                # Validate target ranges
+                if internal_name == 'steer':
+                    targets[internal_name] = targets[internal_name].clip(-1.0, 1.0)
+                elif internal_name in ['accel', 'brake', 'clutch']:
+                    targets[internal_name] = targets[internal_name].clip(0.0, 1.0)
+                elif internal_name == 'gear':
+                    targets[internal_name] = targets[internal_name].clip(1, 6).round().astype(int)
+            
+            if missing_targets:
+                print(f"Warning: Missing target columns: {', '.join(missing_targets)}")
+            
+            if not targets:
+                raise ValueError("No valid target columns found in the dataset")
+            
+            return targets
+            
+        except Exception as e:
+            print(f"Error in prepare_targets: {str(e)}")
+            raise
+    
+    def preprocess_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply minimal preprocessing to the dataset"""
+        print("\nPreprocessing data...")
+        original_len = len(df)
         
-        # Convert target columns to float and handle NaN values
-        targets = {}
-        for internal_name, csv_name in target_columns.items():
-            targets[internal_name] = pd.to_numeric(df[csv_name], errors='coerce')
-            targets[internal_name] = targets[internal_name].ffill().bfill()
+        # Filter out redundant stationary rows
+        print("Filtering out redundant stationary rows...")
+        df['DistanceCovered_diff'] = df['DistanceCovered'].diff()
+        race_starts = df[(df['DistanceCovered'] == 0) & (df['FuelLevel'] == 94)].index
+        df = df[(df['DistanceCovered_diff'] > 0) | 
+               (df.index.isin(race_starts)) | 
+               (df['DistanceCovered_diff'].isna())]
+        df = df.drop('DistanceCovered_diff', axis=1)
+        print(f"After filtering: {len(df)} rows")
         
-        return targets
+        return df
     
     def train_track_model(self, track_name: str, csv_path: str):
-        """Train models for a specific track with improved parameters"""
+        """Train models for a specific track"""
         try:
             print(f"\nTraining models for {track_name} track...")
             
+            # Check if file exists
+            if not os.path.exists(csv_path):
+                raise FileNotFoundError(f"Data file not found: {csv_path}")
+            
             # Load and prepare data
-            df = pd.read_csv(csv_path, low_memory=False)
+            try:
+                df = pd.read_csv(csv_path, low_memory=False)
+            except Exception as e:
+                raise ValueError(f"Error reading CSV: {str(e)}")
+            
+            if len(df) == 0:
+                raise ValueError("Empty dataset")
+                
             print(f"Loaded {len(df)} rows of data")
             
-            # Validate data
-            print("\nValidating data...")
-            print("Target value ranges:")
-            for col in ['Steering', 'Acceleration', 'Braking']:
-                if col in df.columns:
-                    print(f"{col}: min={df[col].min():.3f}, max={df[col].max():.3f}, mean={df[col].mean():.3f}")
-                else:
-                    print(f"Warning: {col} column not found in data")
+            # Apply specific preprocessing
+            df = self.preprocess_data(df)
             
-            # Check for missing values
-            missing = df[['Steering', 'Acceleration', 'Braking']].isnull().sum()
-            print("\nMissing values in targets:")
-            print(missing)
+            if len(df) == 0:
+                raise ValueError("No data after preprocessing")
+            
+            # Filter out redundant stationary rows
+            print("\nFiltering out redundant stationary rows...")
+            df['DistanceCovered_diff'] = df['DistanceCovered'].diff()
+            race_starts = df[(df['DistanceCovered'] == 0) & (df['FuelLevel'] == 94)].index
+            df = df[(df['DistanceCovered_diff'] > 0) | 
+                   (df.index.isin(race_starts)) | 
+                   (df['DistanceCovered_diff'].isna())]
+            df = df.drop('DistanceCovered_diff', axis=1)
+            print(f"After filtering: {len(df)} rows")
+            
+            if len(df) == 0:
+                raise ValueError("No data after filtering")
             
             # Prepare features and targets
             X = self.prepare_features(df)
             y = self.prepare_targets(df)
             
             print(f"\nFeature shape: {X.shape}")
-            print("Feature value ranges:")
-            for col in X.columns[:5]:  # Print first 5 features
-                print(f"{col}: min={X[col].min():.3f}, max={X[col].max():.3f}, mean={X[col].mean():.3f}")
             
             # Scale features using single scaler per track
             X_scaled = self.scalers[track_name].fit_transform(X)
             X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
             
             # Train models for each control action
-            for action in ['steer', 'accel', 'brake']:
+            for action in ['steer', 'accel', 'brake', 'clutch', 'gear']:
+                if action not in y:
+                    print(f"Skipping {action} - no target data")
+                    continue
+                    
                 print(f"\nTraining {action} model...")
                 
                 # Split data
@@ -127,76 +211,64 @@ class TORCSModelTrainer:
                     X_scaled, y[action], test_size=0.2, random_state=42
                 )
                 
-                print(f"Training set size: {len(X_train)}")
-                print(f"Test set size: {len(X_test)}")
-                print(f"Target distribution - min: {y_train.min():.3f}, max: {y_train.max():.3f}, mean: {y_train.mean():.3f}")
+                if len(X_train) == 0 or len(X_test) == 0:
+                    print(f"Skipping {action} - insufficient data")
+                    continue
                 
-                # Initialize XGBoost model with improved parameters
-                model = xgb.XGBRegressor(
-                    objective='reg:squarederror',
-                    n_estimators=2000,
-                    learning_rate=0.01,
-                    max_depth=8,
-                    min_child_weight=3,
-                    subsample=0.8,
-                    colsample_bytree=0.8,
-                    gamma=0.1,
-                    reg_alpha=0.1,
-                    reg_lambda=1.0,
+                print(f"Training set: {len(X_train)} rows")
+                print(f"Test set: {len(X_test)} rows")
+                
+                # Initialize MLPRegressor with specified architecture
+                model = MLPRegressor(
+                    hidden_layer_sizes=(128, 64, 32),
+                    activation='relu',
+                    solver='adam',
+                    alpha=0.0001,
+                    batch_size='auto',
+                    learning_rate='constant',
+                    learning_rate_init=0.001,
+                    max_iter=1000,
                     random_state=42,
-                    early_stopping_rounds=100,
-                    eval_metric=['rmse', 'mae']
-                )
-                
-                # Train with early stopping
-                eval_set = [(X_train, y_train), (X_test, y_test)]
-                model.fit(
-                    X_train, y_train,
-                    eval_set=eval_set,
                     verbose=True
                 )
+                
+                # Train model
+                try:
+                    model.fit(X_train, y_train)
+                except Exception as e:
+                    print(f"Training failed: {str(e)}")
+                    continue
                 
                 self.models[track_name][action] = model
                 
                 # Save model and scaler
-                model_path = f'models/{track_name}/{action}_model.joblib'
-                joblib.dump(model, model_path)
-                
-                # Save scaler only once per track
-                if action == 'steer':
-                    scaler_path = f'models/{track_name}/scaler.joblib'
-                    joblib.dump(self.scalers[track_name], scaler_path)
+                try:
+                    model_path = f'models/{track_name}/{action}_model.joblib'
+                    joblib.dump(model, model_path)
+                    
+                    if action == 'steer':
+                        scaler_path = f'models/{track_name}/scaler.joblib'
+                        joblib.dump(self.scalers[track_name], scaler_path)
+                except Exception as e:
+                    print(f"Model save failed: {str(e)}")
+                    continue
                 
                 # Evaluate model
-                y_pred = model.predict(X_test)
-                mse = np.mean((y_test - y_pred) ** 2)
-                rmse = np.sqrt(mse)
-                mae = np.mean(np.abs(y_test - y_pred))
-                
-                print(f"\nFinal model evaluation for {action}:")
-                print(f"RMSE: {rmse:.4f} (Target range: {y_test.min():.3f} to {y_test.max():.3f})")
-                print(f"MAE: {mae:.4f}")
-                print(f"Prediction range - min: {y_pred.min():.3f}, max: {y_pred.max():.3f}, mean: {y_pred.mean():.3f}")
-                
-                # Calculate and print error distribution
-                errors = y_test - y_pred
-                print(f"Error distribution:")
-                print(f"  Mean error: {errors.mean():.4f}")
-                print(f"  Std error: {errors.std():.4f}")
-                print(f"  Max positive error: {errors.max():.4f}")
-                print(f"  Max negative error: {errors.min():.4f}")
-                
-                # Print feature importance
-                feature_importance = pd.DataFrame({
-                    'feature': X.columns,
-                    'importance': model.feature_importances_
-                })
-                feature_importance = feature_importance.sort_values('importance', ascending=False)
-                print(f"\nTop 5 important features for {action}:")
-                print(feature_importance.head(5))
+                try:
+                    y_pred = model.predict(X_test)
+                    mse = np.mean((y_test - y_pred) ** 2)
+                    rmse = np.sqrt(mse)
+                    mae = np.mean(np.abs(y_test - y_pred))
+                    
+                    print(f"\nModel evaluation for {action}:")
+                    print(f"RMSE: {rmse:.4f}")
+                    print(f"MAE: {mae:.4f}")
+                    print(f"Prediction range: [{y_pred.min():.3f}, {y_pred.max():.3f}]")
+                except Exception as e:
+                    print(f"Evaluation failed: {str(e)}")
                 
         except Exception as e:
-            print(f"Error during model training for {track_name}: {str(e)}")
+            print(f"Training failed: {str(e)}")
             import traceback
             traceback.print_exc()
     
@@ -236,7 +308,7 @@ class TORCSModelTrainer:
             self.scalers[track_name] = StandardScaler()
         
         # Load models
-        for action in ['steer', 'accel', 'brake']:
+        for action in ['steer', 'accel', 'brake', 'clutch', 'gear']:
             model_path = f'models/{track_name}/{action}_model.joblib'
             if os.path.exists(model_path):
                 try:
