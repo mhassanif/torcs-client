@@ -9,8 +9,8 @@ from typing import Dict, List, Tuple
 
 class TORCSModelTrainer:
     def __init__(self):
-        # Only include tracks that have data for now
-        self.tracks = ['road', 'oval', 'dirt']
+        # Only include road track for now
+        self.tracks = ['road']  # Commented out other tracks: 'oval', 'dirt'
         self.models = {
             track: {
                 'steer': None,
@@ -115,7 +115,10 @@ class TORCSModelTrainer:
                 # Validate target ranges
                 if internal_name == 'steer':
                     targets[internal_name] = targets[internal_name].clip(-1.0, 1.0)
-                elif internal_name in ['accel', 'brake', 'clutch']:
+                elif internal_name == 'accel':
+                    # Convert acceleration to discrete values (0 or 1) during data preparation
+                    targets[internal_name] = (targets[internal_name] > 0.1).astype(int)
+                elif internal_name in ['brake', 'clutch']:
                     targets[internal_name] = targets[internal_name].clip(0.0, 1.0)
                 elif internal_name == 'gear':
                     targets[internal_name] = targets[internal_name].clip(1, 6).round().astype(int)
@@ -224,10 +227,13 @@ class TORCSModelTrainer:
                     activation='relu',
                     solver='adam',
                     alpha=0.0001,
-                    batch_size='auto',
+                    batch_size=32,
                     learning_rate='constant',
                     learning_rate_init=0.001,
                     max_iter=1000,
+                    early_stopping=True,
+                    validation_fraction=0.1,
+                    n_iter_no_change=10,
                     random_state=42,
                     verbose=True
                 )
@@ -276,8 +282,8 @@ class TORCSModelTrainer:
         """Train models for all available tracks"""
         track_data = {
             'road': 'logs/road_merged.csv',
-            'oval': 'logs/oval_merged.csv',
-            'dirt': 'logs/dirt_merged.csv'
+            # 'oval': 'logs/oval_merged.csv',  # Commented out for now
+            # 'dirt': 'logs/dirt_merged.csv'   # Commented out for now
         }
         
         for track, csv_path in track_data.items():
