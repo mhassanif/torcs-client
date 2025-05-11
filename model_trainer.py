@@ -1,10 +1,12 @@
 import pandas as pd
 import numpy as np
-from sklearn.neural_network import MLPRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPRegressor, MLPClassifier
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error
 import joblib
 import os
+import time
 from typing import Dict, List, Tuple
 
 class TORCSModelTrainer:
@@ -114,6 +116,7 @@ class TORCSModelTrainer:
                 
                 # Validate target ranges
                 if internal_name == 'steer':
+                    # Clip steering values to valid range
                     targets[internal_name] = targets[internal_name].clip(-1.0, 1.0)
                 elif internal_name == 'accel':
                     # Convert acceleration to discrete values (0 or 1) during data preparation
@@ -121,7 +124,10 @@ class TORCSModelTrainer:
                 elif internal_name in ['brake', 'clutch']:
                     targets[internal_name] = targets[internal_name].clip(0.0, 1.0)
                 elif internal_name == 'gear':
-                    targets[internal_name] = targets[internal_name].clip(1, 6).round().astype(int)
+                    # Convert gear to integer and handle reverse gear (-1)
+                    targets[internal_name] = targets[internal_name].round().astype(int)
+                    # Ensure gear is between -1 and 6
+                    targets[internal_name] = targets[internal_name].clip(-1, 6)
             
             if missing_targets:
                 print(f"Warning: Missing target columns: {', '.join(missing_targets)}")
@@ -201,6 +207,28 @@ class TORCSModelTrainer:
             X_scaled = self.scalers[track_name].fit_transform(X)
             X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
             
+            # Define parameter grids for different actions
+            regression_param_grid = {
+                'hidden_layer_sizes': [(128,), (128, 64), (128, 64, 32)],
+                'activation': ['relu'],
+                'learning_rate_init': [0.001, 0.0001],
+                'max_iter': [500],
+                'batch_size': ['auto', 32, 64],
+                'alpha': [0.0001, 0.001]
+            }
+            
+            classification_param_grid = {
+                'hidden_layer_sizes': [(128,), (128, 64), (128, 64, 32)],
+                'activation': ['relu'],
+                'learning_rate_init': [0.001, 0.0001],
+                'max_iter': [500],
+                'batch_size': ['auto', 32, 64],
+                'alpha': [0.0001, 0.001]
+            }
+            
+            # 2-fold cross-validation
+            cv = KFold(n_splits=2, shuffle=True, random_state=42)
+            
             # Train models for each control action
             for action in ['steer', 'accel', 'brake', 'clutch', 'gear']:
                 if action not in y:
@@ -208,6 +236,7 @@ class TORCSModelTrainer:
                     continue
                     
                 print(f"\nTraining {action} model...")
+                start_time = time.time()
                 
                 # Split data
                 X_train, X_test, y_train, y_test = train_test_split(
@@ -221,36 +250,38 @@ class TORCSModelTrainer:
                 print(f"Training set: {len(X_train)} rows")
                 print(f"Test set: {len(X_test)} rows")
                 
-                # Initialize MLPRegressor with specified architecture
-                model = MLPRegressor(
-                    hidden_layer_sizes=(128, 64, 32),
-                    activation='relu',
-                    solver='adam',
-                    alpha=0.0001,
-                    batch_size=32,
-                    learning_rate='constant',
-                    learning_rate_init=0.001,
-                    max_iter=1000,
-                    early_stopping=True,
-                    validation_fraction=0.1,
-                    n_iter_no_change=10,
-                    random_state=42,
-                    verbose=True
+                # Initialize GridSearchCV with appropriate model type
+                if action == 'gear':
+                    base_model = MLPClassifier(random_state=42, early_stopping=True)
+                    param_grid = classification_param_grid
+                else:
+                    base_model = MLPRegressor(random_state=42, early_stopping=True)
+                    param_grid = regression_param_grid
+                
+                grid = GridSearchCV(
+                    estimator=base_model,
+                    param_grid=param_grid,
+                    cv=cv,
+                    verbose=1,
+                    n_jobs=-1
                 )
                 
                 # Train model
                 try:
-                    model.fit(X_train, y_train)
+                    grid.fit(X_train, y_train)
+                    best_model = grid.best_estimator_
+                    print(f"\nBest parameters for {action}:")
+                    print(grid.best_params_)
                 except Exception as e:
                     print(f"Training failed: {str(e)}")
                     continue
                 
-                self.models[track_name][action] = model
+                self.models[track_name][action] = best_model
                 
                 # Save model and scaler
                 try:
                     model_path = f'models/{track_name}/{action}_model.joblib'
-                    joblib.dump(model, model_path)
+                    joblib.dump(best_model, model_path)
                     
                     if action == 'steer':
                         scaler_path = f'models/{track_name}/scaler.joblib'
@@ -261,15 +292,25 @@ class TORCSModelTrainer:
                 
                 # Evaluate model
                 try:
-                    y_pred = model.predict(X_test)
-                    mse = np.mean((y_test - y_pred) ** 2)
-                    rmse = np.sqrt(mse)
-                    mae = np.mean(np.abs(y_test - y_pred))
+                    y_pred = best_model.predict(X_test)
+                    if action == 'gear':
+                        # For gear classification, calculate accuracy
+                        accuracy = np.mean(y_test == y_pred)
+                        print(f"\nModel evaluation for {action}:")
+                        print(f"Accuracy: {accuracy:.4f}")
+                        print(f"Unique predicted gears: {np.unique(y_pred)}")
+                    else:
+                        # For regression tasks, calculate MSE and MAE
+                        mse = mean_squared_error(y_test, y_pred)
+                        rmse = np.sqrt(mse)
+                        mae = np.mean(np.abs(y_test - y_pred))
+                        print(f"\nModel evaluation for {action}:")
+                        print(f"RMSE: {rmse:.4f}")
+                        print(f"MAE: {mae:.4f}")
+                        print(f"Prediction range: [{y_pred.min():.3f}, {y_pred.max():.3f}]")
                     
-                    print(f"\nModel evaluation for {action}:")
-                    print(f"RMSE: {rmse:.4f}")
-                    print(f"MAE: {mae:.4f}")
-                    print(f"Prediction range: [{y_pred.min():.3f}, {y_pred.max():.3f}]")
+                    elapsed = time.time() - start_time
+                    print(f"Training time: {elapsed:.2f} seconds")
                 except Exception as e:
                     print(f"Evaluation failed: {str(e)}")
                 

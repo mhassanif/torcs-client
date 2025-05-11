@@ -159,7 +159,7 @@ class Driver(object):
                         pred = max(min(pred, 1.0), 0.0)
                     else:  # gear
                         pred = round(pred)
-                        pred = max(min(pred, 6), 1)
+                        pred = max(min(pred, 6), -1)  # or -1 for reverse gear
                     
                     predictions[action] = pred
                     print(f"Predicted {action}: {pred:.3f}")
@@ -206,7 +206,7 @@ class Driver(object):
             # Fallback to safe default values
             self.control.setGear(1)
             self.control.setSteer(0.0)
-            self.control.setAccel(0.3)
+            self.control.setAccel(0.8)
             self.control.setBrake(0.0)
             self.control.setClutch(0.0)
             return self.control.toMsg()
