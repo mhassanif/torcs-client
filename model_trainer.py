@@ -5,11 +5,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import joblib
 import os
+from typing import Dict, List, Tuple
 
 class TORCSModelTrainer:
     def __init__(self):
         # Only include tracks that have data for now
-        self.tracks = ['road', 'oval', 'dirt']  # Removed 'dirt' until data is available
+        self.tracks = ['road', 'oval', 'dirt']
         self.models = {
             track: {
                 'steer': None,
@@ -17,12 +18,9 @@ class TORCSModelTrainer:
                 'brake': None
             } for track in self.tracks
         }
+        # Single scaler per track
         self.scalers = {
-            track: {
-                'steer': StandardScaler(),
-                'accel': StandardScaler(),
-                'brake': StandardScaler()
-            } for track in self.tracks
+            track: StandardScaler() for track in self.tracks
         }
         
         # Create models directory if it doesn't exist
@@ -39,44 +37,52 @@ class TORCSModelTrainer:
         """Check the headers of a CSV file"""
         try:
             df = pd.read_csv(csv_path, nrows=0)  # Only read headers
-            print(f"\nHeaders in {csv_path}:")
-            print(df.columns.tolist())
             return df.columns.tolist()
         except Exception as e:
             print(f"Error reading CSV headers from {csv_path}: {str(e)}")
             return None
     
-    def prepare_features(self, df):
-        """Prepare feature set from raw data"""
-        # Define only essential features
-        all_features = [
+    def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Prepare feature set from raw data with temporal features"""
+        # Define base features
+        base_features = [
             'Angle',              # Car's angle relative to track
-            'CurrentLapTime',     # Current lap time
-            'DistanceFromStart',  # Distance from start line
-            'DistanceCovered',    # Total distance covered
             'SpeedX',            # Longitudinal speed
             'SpeedY',            # Lateral speed
             'TrackPosition',      # Position relative to track center
             'RPM'                # Engine RPM
         ]
         
-        # Add track sensors (these are crucial for navigation)
-        all_features.extend([f'Track_{i}' for i in range(1, 20)])
+        # Add track sensors
+        base_features.extend([f'Track_{i}' for i in range(1, 20)])
         
-        # Check which features are actually present in the dataframe
-        available_features = [col for col in all_features if col in df.columns]
+        # Check which features are actually present
+        available_features = [col for col in base_features if col in df.columns]
         
-        # Convert all columns to float
+        # Convert all columns to float and handle NaN values
+        df = df[available_features].astype(float)
+        df = df.ffill().bfill()
+        
+        # Create lag features (previous timestep)
+        lag_features = pd.DataFrame()
         for col in available_features:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            lag_features[f'{col}_lag1'] = df[col].shift(1)
         
-        # Drop any rows with NaN values
-        df = df.dropna(subset=available_features)
+        # Create difference features (current - previous)
+        diff_features = pd.DataFrame()
+        for col in available_features:
+            diff_features[f'{col}_diff'] = df[col] - df[col].shift(1)
         
-        return df[available_features]
+        # Combine all features
+        all_features = pd.concat([df, lag_features, diff_features], axis=1)
+        
+        # Drop first row due to lag features
+        all_features = all_features.dropna()
+        
+        return all_features
     
-    def prepare_targets(self, df):
-        """Prepare target variables"""
+    def prepare_targets(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
+        """Prepare target variables with synchronized alignment"""
         # Map of internal names to CSV column names
         target_columns = {
             'steer': 'Steering',
@@ -84,118 +90,95 @@ class TORCSModelTrainer:
             'brake': 'Braking'
         }
         
-        # Convert target columns to float
+        # Convert target columns to float and handle NaN values
+        targets = {}
         for internal_name, csv_name in target_columns.items():
-            df[csv_name] = pd.to_numeric(df[csv_name], errors='coerce')
+            targets[internal_name] = pd.to_numeric(df[csv_name], errors='coerce')
+            targets[internal_name] = targets[internal_name].ffill().bfill()
         
-        # Drop any rows with NaN values in targets
-        df = df.dropna(subset=list(target_columns.values()))
+        # Drop first row to match features (due to lag features)
+        for name in targets:
+            targets[name] = targets[name].iloc[1:]
         
-        return {
-            'steer': df['Steering'],
-            'accel': df['Acceleration'],
-            'brake': df['Braking']
-        }
+        return targets
     
-    def train_track_model(self, track_name, csv_path):
-        """Train models for a specific track"""
+    def train_track_model(self, track_name: str, csv_path: str):
+        """Train models for a specific track with improved parameters"""
         try:
             print(f"\nTraining models for {track_name} track...")
-            print(f"Loading data from {csv_path}...")
             
-            # Check CSV headers first
-            headers = self.check_csv_headers(csv_path)
-            if headers is None:
-                return
-            
+            # Load and prepare data
             df = pd.read_csv(csv_path, low_memory=False)
             print(f"Loaded {len(df)} rows of data")
             
             # Prepare features and targets
-            print("Preparing features and targets...")
             X = self.prepare_features(df)
             y = self.prepare_targets(df)
             
-            print(f"Features shape: {X.shape}")
-            print(f"Targets shape: {y['steer'].shape}")
+            # Scale features using single scaler per track
+            X_scaled = self.scalers[track_name].fit_transform(X)
+            X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
             
             # Train models for each control action
             for action in ['steer', 'accel', 'brake']:
-                print(f"\nTraining {action} model for {track_name}...")
+                print(f"\nTraining {action} model...")
                 
-                # Split data for this action
+                # Split data
                 X_train, X_test, y_train, y_test = train_test_split(
-                    X, y[action], test_size=0.2, random_state=42
+                    X_scaled, y[action], test_size=0.2, random_state=42
                 )
                 
-                print(f"Training set size: {len(X_train)}")
-                print(f"Test set size: {len(X_test)}")
-                
-                # Scale features
-                X_scaled = self.scalers[track_name][action].fit_transform(X_train)
-                X_test_scaled = self.scalers[track_name][action].transform(X_test)
-                
-                # Initialize and train model with optimized parameters
+                # Initialize XGBoost model with improved parameters
                 model = xgb.XGBRegressor(
                     objective='reg:squarederror',
-                    n_estimators=500,  # Increased from 200
-                    learning_rate=0.1,  # Increased from 0.05
-                    max_depth=8,        # Increased from 6
-                    min_child_weight=1, # Decreased from 2
-                    subsample=0.9,      # Increased from 0.8
-                    colsample_bytree=0.9, # Increased from 0.8
-                    gamma=0.05,         # Decreased from 0.1
-                    reg_alpha=0.05,     # Decreased from 0.1
-                    reg_lambda=0.5,     # Decreased from 1
-                    random_state=42
+                    n_estimators=1000,
+                    learning_rate=0.05,
+                    max_depth=10,
+                    min_child_weight=2,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    gamma=0.1,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    random_state=42,
+                    early_stopping_rounds=50,
+                    eval_metric=['rmse', 'mae']
                 )
                 
-                print(f"Fitting {action} model...")
-                model.fit(X_scaled, y_train)
+                # Train with early stopping
+                eval_set = [(X_test, y_test)]
+                model.fit(
+                    X_train, y_train,
+                    eval_set=eval_set,
+                    verbose=False  # Disable verbose output
+                )
                 
                 self.models[track_name][action] = model
                 
-                # Create track directory if it doesn't exist
-                track_dir = f'models/{track_name}'
-                if not os.path.exists(track_dir):
-                    os.makedirs(track_dir)
-                
                 # Save model and scaler
-                print(f"Saving {action} model and scaler to {track_dir}...")
-                model_path = f'{track_dir}/{action}_model.joblib'
-                scaler_path = f'{track_dir}/{action}_scaler.joblib'
-                
+                model_path = f'models/{track_name}/{action}_model.joblib'
                 joblib.dump(model, model_path)
-                joblib.dump(self.scalers[track_name][action], scaler_path)
                 
-                print(f"Model saved to {model_path}")
-                print(f"Scaler saved to {scaler_path}")
+                # Save scaler only once per track
+                if action == 'steer':
+                    scaler_path = f'models/{track_name}/scaler.joblib'
+                    joblib.dump(self.scalers[track_name], scaler_path)
                 
                 # Evaluate model
-                y_pred = model.predict(X_test_scaled)
+                y_pred = model.predict(X_test)
                 mse = np.mean((y_test - y_pred) ** 2)
                 rmse = np.sqrt(mse)
-                print(f"{track_name} {action} model RMSE: {rmse:.4f}")
+                print(f"{action} model RMSE: {rmse:.4f}")
                 
-                # Print feature importance
+                # Print only top 3 important features
                 feature_importance = pd.DataFrame({
                     'feature': X.columns,
                     'importance': model.feature_importances_
                 })
                 feature_importance = feature_importance.sort_values('importance', ascending=False)
-                print(f"\nTop 10 important features for {track_name} {action}:")
-                print(feature_importance.head(10))
+                print(f"Top 3 important features for {action}:")
+                print(feature_importance.head(3))
                 
-                # Print prediction statistics
-                print(f"\nPrediction statistics for {action}:")
-                print(f"Min prediction: {np.min(y_pred):.4f}")
-                print(f"Max prediction: {np.max(y_pred):.4f}")
-                print(f"Mean prediction: {np.mean(y_pred):.4f}")
-                print(f"Std prediction: {np.std(y_pred):.4f}")
-                
-        except FileNotFoundError:
-            print(f"Error: Could not find data file at {csv_path}")
-            print(f"Please ensure the {track_name} race data CSV file exists in the logs directory.")
         except Exception as e:
             print(f"Error during model training for {track_name}: {str(e)}")
             import traceback
@@ -216,30 +199,39 @@ class TORCSModelTrainer:
                 print(f"Warning: Data file for {track} track not found at {csv_path}")
     
     def load_models(self, track_name=None):
-        """Load trained models and scalers for specified track or all tracks"""
-        tracks_to_load = [track_name] if track_name else self.tracks
+        """Load trained models and scaler for specified track"""
+        if track_name is None:
+            print("Error: No track type specified for model loading")
+            return
+            
+        print(f"\nLoading models for {track_name} track...")
         
-        for track in tracks_to_load:
-            print(f"\nLoading models for {track} track...")
-            for action in ['steer', 'accel', 'brake']:
-                model_path = f'models/{track}/{action}_model.joblib'
-                scaler_path = f'models/{track}/{action}_scaler.joblib'
-                
-                if os.path.exists(model_path) and os.path.exists(scaler_path):
-                    try:
-                        self.models[track][action] = joblib.load(model_path)
-                        self.scalers[track][action] = joblib.load(scaler_path)
-                        print(f"Successfully loaded {track} {action} model and scaler")
-                    except Exception as e:
-                        print(f"Error loading {track} {action} model: {str(e)}")
-                        self.models[track][action] = None
-                        self.scalers[track][action] = None
-                else:
-                    print(f"Warning: {track} {action} model or scaler not found at:")
-                    print(f"  Model: {model_path}")
-                    print(f"  Scaler: {scaler_path}")
-                    self.models[track][action] = None
-                    self.scalers[track][action] = None
+        # Load scaler first
+        scaler_path = f'models/{track_name}/scaler.joblib'
+        if os.path.exists(scaler_path):
+            try:
+                self.scalers[track_name] = joblib.load(scaler_path)
+                print(f"Successfully loaded {track_name} scaler")
+            except Exception as e:
+                print(f"Error loading {track_name} scaler: {str(e)}")
+                self.scalers[track_name] = StandardScaler()
+        else:
+            print(f"Warning: {track_name} scaler not found at {scaler_path}")
+            self.scalers[track_name] = StandardScaler()
+        
+        # Load models
+        for action in ['steer', 'accel', 'brake']:
+            model_path = f'models/{track_name}/{action}_model.joblib'
+            if os.path.exists(model_path):
+                try:
+                    self.models[track_name][action] = joblib.load(model_path)
+                    print(f"Successfully loaded {track_name} {action} model")
+                except Exception as e:
+                    print(f"Error loading {track_name} {action} model: {str(e)}")
+                    self.models[track_name][action] = None
+            else:
+                print(f"Warning: {track_name} {action} model not found at {model_path}")
+                self.models[track_name][action] = None
 
 if __name__ == '__main__':
     trainer = TORCSModelTrainer()

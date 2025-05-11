@@ -26,59 +26,60 @@ class Driver(object):
         self.state = carState.CarState()
         self.control = carControl.CarControl()
         
-        # Simplified steering and speed parameters
-        self.steer_lock = 0.785398
-        self.max_speed = 100
-        self.prev_rpm = None
-        
-        # Add external control inputs
-        self.external_steer = None
-        self.external_accel = None
-        self.external_brake = None
-        
-        # Initialize keyboard controls
-        self.steering_value = 0.0
-        self.accel_value = 0.0
-        self.brake_value = 0.0
-        self.is_reverse = False
-        
-        # Initialize data logger
-        self.logger = None
-        
-        # Initialize model trainer and load models
+        # Initialize model trainer
         self.model_trainer = TORCSModelTrainer()
-        print("Loading models from models directory...")
-        self.model_trainer.load_models()
         
-        # Define only essential feature columns
-        self.feature_columns = [
+        # Track type mapping (1=road, 2=oval, 3=dirt)
+        self.track_type_map = {
+            1: 'road',
+            2: 'oval',
+            3: 'dirt'
+        }
+        
+        # Current track type
+        self.current_track_type = None
+        
+        # Initialize feature storage for temporal features
+        self.feature_history = []
+        self.max_history = 2  # For lag and difference features
+        
+        # Define base features (matching model_trainer exactly)
+        self.base_features = [
             'Angle',              # Car's angle relative to track
-            'CurrentLapTime',     # Current lap time
-            'DistanceFromStart',  # Distance from start line
-            'DistanceCovered',    # Total distance covered
             'SpeedX',            # Longitudinal speed
             'SpeedY',            # Lateral speed
             'TrackPosition',      # Position relative to track center
             'RPM'                # Engine RPM
         ]
         
-        # Add track sensors
-        self.feature_columns.extend([f'Track_{i}' for i in range(1, 20)])
+        # Add track sensors (matching model_trainer)
+        self.base_features.extend([f'Track_{i}' for i in range(1, 20)])
         
-        # Track mapping and parameters
-        self.track_mapping = {
-            'G-Speedway': 'oval',
-            'E-Track3': 'road',
-            'Dirt2': 'road'  # Temporarily map dirt tracks to road models until dirt models are available
+        # Initialize control values
+        self.steering_value = 0.0
+        self.accel_value = 0.0
+        self.brake_value = 0.0
+        self.is_reverse = False
+        
+        # Gear shifting parameters
+        self.gear_shift_rpm = {
+            1: 3000,  # Shift up from 1st at 3000 RPM
+            2: 3500,  # Shift up from 2nd at 3500 RPM
+            3: 4000,  # Shift up from 3rd at 4000 RPM
+            4: 4500,  # Shift up from 4th at 4500 RPM
+            5: 5000,  # Shift up from 5th at 5000 RPM
+            6: 5500   # Shift up from 6th at 5500 RPM
+        }
+        self.gear_down_rpm = {
+            2: 2000,  # Shift down to 1st at 2000 RPM
+            3: 2500,  # Shift down to 2nd at 2500 RPM
+            4: 3000,  # Shift down to 3rd at 3000 RPM
+            5: 3500,  # Shift down to 4th at 3500 RPM
+            6: 4000   # Shift down to 5th at 4000 RPM
         }
         
-        self.track_params = {
-            'oval': {'max_speed': 120, 'steer_lock': 0.785398},
-            'road': {'max_speed': 100, 'steer_lock': 0.785398},
-        }
-        
-        # Current track type
-        self.current_track_type = None
+        print(f"Debug - Driver initialized with stage: {stage}")
+        print(f"Debug - Track mapping: {self.track_type_map}")
         
         # Set up keyboard event handlers
         keyboard.on_press_key('a', lambda _: self.handle_steering('left'))
@@ -106,31 +107,66 @@ class Driver(object):
         return self.parser.stringify({'init': self.angles})
     
     def prepare_features_for_prediction(self):
-        """Prepare features for model prediction"""
-        features = {
-            'Angle': self.state.getAngle(),
-            'CurrentLapTime': self.state.getCurLapTime(),
-            'DistanceFromStart': self.state.getDistFromStart(),
-            'DistanceCovered': self.state.getDistRaced(),
-            'SpeedX': self.state.getSpeedX(),
-            'SpeedY': self.state.getSpeedY(),
-            'TrackPosition': self.state.getTrackPos(),
-            'RPM': self.state.getRpm()
-        }
+        """Prepare features for model prediction with temporal features"""
+        # Get current state features
+        current_features = {}
+        
+        # Add base features
+        current_features['Angle'] = self.state.getAngle()
+        current_features['SpeedX'] = self.state.getSpeedX()
+        current_features['SpeedY'] = self.state.getSpeedY()
+        current_features['TrackPosition'] = self.state.getTrackPos()
+        current_features['RPM'] = self.state.getRpm()
         
         # Add track sensors
         track_sensors = self.state.getTrack()
         if track_sensors is not None:
             for i, value in enumerate(track_sensors, 1):
-                features[f'Track_{i}'] = value
+                current_features[f'Track_{i}'] = value
         
-        print(f"\nDebug - Number of features prepared: {len(features)}")
-        print(f"Debug - Expected feature columns: {len(self.feature_columns)}")
-        print(f"Debug - Missing features: {set(self.feature_columns) - set(features.keys())}")
+        # Convert to DataFrame
+        current_df = pd.DataFrame([current_features])
         
-        # Convert to numpy array
-        feature_values = np.array([features[col] for col in self.feature_columns])
-        return feature_values.reshape(1, -1)
+        # Add to history
+        self.feature_history.append(current_df)
+        if len(self.feature_history) > self.max_history:
+            self.feature_history.pop(0)
+        
+        # If we have enough history, create temporal features
+        if len(self.feature_history) == self.max_history:
+            # Combine current and previous features
+            combined_df = pd.concat(self.feature_history, axis=0)
+            
+            # Create lag features
+            lag_features = combined_df.shift(1)
+            
+            # Create difference features
+            diff_features = combined_df - lag_features
+            
+            # Combine all features
+            all_features = pd.concat([
+                combined_df.iloc[-1:],  # Current features
+                lag_features.iloc[-1:],  # Lag features
+                diff_features.iloc[-1:]  # Difference features
+            ], axis=1)
+            
+            # Drop any NaN values using new methods
+            all_features = all_features.ffill().bfill()
+            
+            # Ensure we only use the features that match the model
+            feature_columns = []
+            for feature in self.base_features:
+                feature_columns.append(feature)
+                feature_columns.append(f"{feature}_lag1")
+                feature_columns.append(f"{feature}_diff")
+            
+            # Select only the features that match the model
+            all_features = all_features[feature_columns]
+            
+            return all_features.values
+        else:
+            # If not enough history, return current features with zeros for temporal features
+            return current_df.values
     
     def predict_controls(self, features):
         """Predict control actions using track-specific XGBoost models"""
@@ -148,10 +184,8 @@ class Driver(object):
         for action in ['steer', 'accel', 'brake']:
             if self.model_trainer.models[track_type][action] is not None:
                 try:
-                    # Scale features
-                    print(f"\nDebug - Scaler feature names: {self.model_trainer.scalers[track_type][action].feature_names_in_}")
-                    print(f"Debug - Number of features in scaler: {len(self.model_trainer.scalers[track_type][action].feature_names_in_)}")
-                    features_scaled = self.model_trainer.scalers[track_type][action].transform(features)
+                    # Scale features using track-specific scaler
+                    features_scaled = self.model_trainer.scalers[track_type].transform(features)
                     # Predict
                     pred = self.model_trainer.models[track_type][action].predict(features_scaled)[0]
                     
@@ -194,88 +228,98 @@ class Driver(object):
         
         return predictions
     
+    def get_gear(self):
+        """Determine gear based on speed and RPM"""
+        speed = self.state.getSpeedX()
+        rpm = self.state.getRpm()
+        current_gear = self.state.getGear()
+        
+        # If in reverse, stay in reverse
+        if current_gear < 0:
+            return -1
+        
+        # If speed is very low, use first gear
+        if speed < 5:
+            return 1
+        
+        # Determine gear based on speed ranges
+        if speed < 20:
+            target_gear = 1
+        elif speed < 40:
+            target_gear = 2
+        elif speed < 60:
+            target_gear = 3
+        elif speed < 80:
+            target_gear = 4
+        elif speed < 100:
+            target_gear = 5
+        else:
+            target_gear = 6
+        
+        # RPM-based adjustments
+        if rpm > self.gear_shift_rpm.get(current_gear, 6000) and current_gear < 6:
+            # Shift up if RPM is too high
+            target_gear = min(target_gear + 1, 6)
+        elif rpm < self.gear_down_rpm.get(current_gear, 1000) and current_gear > 1:
+            # Shift down if RPM is too low
+            target_gear = max(target_gear - 1, 1)
+        
+        return target_gear
+    
     def drive(self, msg):
+        """Drive the car based on model predictions"""
         self.state.setFromMsg(msg)
         
-        # Use the track type set from command line
-        if self.current_track_type is not None:
-            track_type = self.current_track_type
-            print(f"\nDebug - Using track type from command line: {track_type}")
-            # Update parameters based on track type
-            if track_type in self.track_params:
-                params = self.track_params[track_type]
-                self.max_speed = params['max_speed']
-                self.steer_lock = params['steer_lock']
-                print(f"Updated parameters for {track_type} track")
-        else:
-            print("Warning: No track type set, using default parameters")
+        # Get current state features
+        state_features = self.prepare_features_for_prediction()
         
         # Check if car is off track
-        track_sensors = self.state.getTrack()
         track_pos = self.state.getTrackPos()
+        is_off_track = abs(track_pos) > 1.0
         
-        # Emergency handling for off-track situations
-        if track_sensors is not None and all(s == -1 for s in track_sensors) or abs(track_pos) > 1.0:
-            print(f"Emergency handling: Car is off track (position: {track_pos:.2f})")
-            # Stop the car
-            self.control.setAccel(0.0)
-            self.control.setBrake(1.0)
-            # Steer back to track
-            if track_pos > 0:
-                self.control.setSteer(-0.5)  # Steer left if too far right
-            else:
-                self.control.setSteer(0.5)   # Steer right if too far left
-            # Set first gear
-            self.control.setGear(1)
+        # If off track, use reverse gear for recovery
+        if is_off_track:
+            print(f"Recovery mode: Off track (position: {track_pos:.2f})")
+            self.control.setGear(-1)  # Reverse gear
+            self.control.setSteer(0.0)  # Straight steering
+            self.control.setAccel(0.5)  # Moderate throttle
+            self.control.setBrake(0.0)
             return self.control.toMsg()
         
-        # Always set gear first
-        self.gear()
-        
-        # Try to use model predictions if available
-        if not any([self.external_steer, self.external_accel, self.external_brake]):
-            features = self.prepare_features_for_prediction()
-            predictions = self.predict_controls(features)
+        # Normal autonomous driving
+        try:
+            # Get model prediction
+            predictions = self.predict_controls(state_features)
             
+            # Set gear based on speed
+            self.control.setGear(self.get_gear())
+            
+            # Apply model predictions
             if predictions['steer'] is not None:
-                # Add safety margin to steering
-                steer = predictions['steer']
-                if abs(track_pos) > 0.5:  # If car is getting close to track edge
-                    # Adjust steering to move back to center
-                    steer = steer * 0.5 + (-0.5 if track_pos > 0 else 0.5)
-                self.control.setSteer(steer)
-            else:
-                self.steer()
+                steering = float(predictions['steer'])
+                steering = max(-1.0, min(1.0, steering))
+                self.control.setSteer(steering)
             
             if predictions['accel'] is not None:
-                # Reduce acceleration if car is not well positioned
-                accel = predictions['accel']
-                if abs(track_pos) > 0.5:
-                    accel *= 0.5  # Reduce acceleration when near track edge
-                self.control.setAccel(accel)
-            else:
-                self.speed()
+                throttle = float(predictions['accel'])
+                throttle = max(0.0, min(1.0, throttle))
+                self.control.setAccel(throttle)
             
             if predictions['brake'] is not None:
-                # Increase braking if car is not well positioned
-                brake = predictions['brake']
-                if abs(track_pos) > 0.5:
-                    brake = max(brake, 0.3)  # Ensure some braking when near track edge
+                brake = float(predictions['brake'])
+                brake = max(0.0, min(1.0, brake))
                 self.control.setBrake(brake)
-            else:
-                self.speed()
-        else:
-            # Use manual/external controls if available
-            self.steer()
-            self.speed()
-        
-        # Log data if logger is initialized
-        if self.logger:
-            self.logger.log_data(self.state, self.control, 
-                               self.current_track_type or 'unknown',
-                               self.get_race_type())
-        
-        return self.control.toMsg()
+            
+            return self.control.toMsg()
+            
+        except Exception as e:
+            print(f"Error in drive: {e}")
+            # Fallback to safe default values
+            self.control.setGear(1)
+            self.control.setSteer(0.0)
+            self.control.setAccel(0.3)
+            self.control.setBrake(0.0)
+            return self.control.toMsg()
     
     def setExternalSteer(self, steer_value):
         """Set external steering input value (-1.0 to 1.0)"""
@@ -310,39 +354,6 @@ class Driver(object):
             angle = self.state.angle
             dist = self.state.trackPos
             self.control.setSteer((angle - dist*0.5)/self.steer_lock)
-    
-    def gear(self):
-        """Simplified gear control based on speed"""
-        speed = self.state.getSpeedX()
-        rpm = self.state.getRpm()
-        
-        # Handle reverse gear
-        if self.is_reverse:
-            self.control.setGear(-1)
-            return
-        
-        # Speed-based gear selection
-        if speed < 10:
-            gear = 1
-        elif speed < 20:
-            gear = 2
-        elif speed < 30:
-            gear = 3
-        elif speed < 40:
-            gear = 4
-        elif speed < 50:
-            gear = 5
-        else:
-            gear = 6
-        
-        # RPM-based adjustments
-        if rpm > 7000 and gear < 6:
-            gear += 1
-        elif rpm < 3000 and gear > 1:
-            gear -= 1
-        
-        self.control.setGear(gear)
-        self.prev_rpm = rpm
     
     def speed(self):
         # Handle external acceleration input
@@ -426,3 +437,14 @@ class Driver(object):
             # When exiting reverse, reset to first gear
             self.control.setGear(1)
             self.control.setAccel(0.0)
+    
+    def set_track_type(self, track_type):
+        """Set the current track type and load appropriate models"""
+        if track_type in self.track_type_map:
+            self.current_track_type = self.track_type_map[track_type]
+            print(f"Loading models for track type: {self.current_track_type}")
+            self.model_trainer.load_models(self.current_track_type)
+        else:
+            print(f"Warning: Unknown track type {track_type}, defaulting to road")
+            self.current_track_type = 'road'
+            self.model_trainer.load_models('road')

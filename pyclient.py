@@ -10,22 +10,14 @@ if __name__ == '__main__':
 # Configure the argument parser
 parser = argparse.ArgumentParser(description='Python client to connect to the TORCS SCRC server.')
 
-parser.add_argument('--host', action='store', dest='host_ip', default='localhost',
-                    help='Host IP address (default: localhost)')
-parser.add_argument('--port', action='store', type=int, dest='host_port', default=3001,
-                    help='Host port number (default: 3001)')
-parser.add_argument('--id', action='store', dest='id', default='SCR',
-                    help='Bot ID (default: SCR)')
-parser.add_argument('--maxEpisodes', action='store', dest='max_episodes', type=int, default=1,
-                    help='Maximum number of learning episodes (default: 1)')
-parser.add_argument('--maxSteps', action='store', dest='max_steps', type=int, default=0,
-                    help='Maximum number of steps (default: 0)')
-parser.add_argument('--track', action='store', dest='track', default=None,
-                    help='Name of the track')
-parser.add_argument('--stage', action='store', dest='stage', type=int, default=3,
-                    help='Stage (0 - Warm-Up, 1 - Qualifying, 2 - Race, 3 - Unknown)')
-parser.add_argument('track_type', type=int, choices=[1, 2, 3],
-                    help='Track type (1=road, 2=oval, 3=dirt)')
+parser.add_argument('track_type', type=int, help='Track type (1=road, 2=oval, 3=dirt)')
+parser.add_argument('--host', default='localhost', help='Server host ip')
+parser.add_argument('--port', type=int, default=3001, help='Server host port')
+parser.add_argument('--id', default='SCR', help='Bot ID')
+parser.add_argument('--max_episodes', type=int, default=1, help='Maximum number of learning episodes')
+parser.add_argument('--max_steps', type=int, default=0, help='Maximum number of steps (0 for no limit)')
+parser.add_argument('--track', help='Track name')
+parser.add_argument('--stage', type=int, default=3, help='Stage (0=WARMUP, 1=QUALIFYING, 2=RACE, 3=UNKNOWN)')
 
 # Print raw arguments for debugging
 print("Raw command line arguments:", sys.argv)
@@ -45,7 +37,7 @@ track_type_map = {
 }
 
 # Print summary
-print(f'\nConnecting to server host ip: {arguments.host_ip} @ port: {arguments.host_port}')
+print(f'\nConnecting to server host ip: {arguments.host} @ port: {arguments.port}')
 print(f'Bot ID: {arguments.id}')
 print(f'Maximum episodes: {arguments.max_episodes}')
 print(f'Maximum steps: {arguments.max_steps}')
@@ -67,13 +59,10 @@ curEpisode = 0
 
 verbose = True  # Enable verbose mode to see all messages
 
+# Initialize driver and set track type
 d = driver.Driver(arguments.stage)
 print("\nDebug - Driver initialized with stage:", arguments.stage)
-print("Debug - Track mapping:", d.track_mapping)
-print("Debug - Track parameters:", d.track_params)
-
-# Set the track type in the driver
-d.current_track_type = track_type_map[arguments.track_type]
+d.set_track_type(arguments.track_type)
 print(f"Using track type: {d.current_track_type}")
 
 while not shutdownClient:
@@ -83,7 +72,7 @@ while not shutdownClient:
         print(f'Sending init string to server: {buf}')
         
         try:
-            sock.sendto(buf.encode(), (arguments.host_ip, arguments.host_port))
+            sock.sendto(buf.encode(), (arguments.host, arguments.port))
         except socket.error as msg:
             print("Failed to send data...Exiting...")
             sys.exit(-1)
@@ -140,7 +129,7 @@ while not shutdownClient:
         
         if buf:
             try:
-                sock.sendto(buf.encode(), (arguments.host_ip, arguments.host_port))
+                sock.sendto(buf.encode(), (arguments.host, arguments.port))
             except socket.error as msg:
                 print("Failed to send data...Exiting...")
                 sys.exit(-1)
@@ -149,6 +138,5 @@ while not shutdownClient:
     
     if curEpisode == arguments.max_episodes:
         shutdownClient = True
-        
 
 sock.close()

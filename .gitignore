@@ -15,7 +15,6 @@ ENV/
 
 # Logs and output data
 *.log
-logs/
 *.out
 *.err
 
