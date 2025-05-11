@@ -107,9 +107,21 @@ class Driver(object):
         return self.parser.stringify({'init': self.angles})
     
     def prepare_features_for_prediction(self):
-        """Prepare features for model prediction with temporal features"""
+        """Prepare features for model prediction"""
         # Get current state features
         current_features = {}
+        
+        # Define base features exactly as in model_trainer
+        base_features = [
+            'Angle',              # Car's angle relative to track
+            'SpeedX',            # Longitudinal speed
+            'SpeedY',            # Lateral speed
+            'TrackPosition',      # Position relative to track center
+            'RPM'                # Engine RPM
+        ]
+        
+        # Add track sensors
+        base_features.extend([f'Track_{i}' for i in range(1, 20)])
         
         # Add base features
         current_features['Angle'] = self.state.getAngle()
@@ -127,46 +139,25 @@ class Driver(object):
         # Convert to DataFrame
         current_df = pd.DataFrame([current_features])
         
-        # Add to history
-        self.feature_history.append(current_df)
-        if len(self.feature_history) > self.max_history:
-            self.feature_history.pop(0)
+        # Check which features are actually present
+        available_features = [col for col in base_features if col in current_df.columns]
         
-        # If we have enough history, create temporal features
-        if len(self.feature_history) == self.max_history:
-            # Combine current and previous features
-            combined_df = pd.concat(self.feature_history, axis=0)
-            
-            # Create lag features
-            lag_features = combined_df.shift(1)
-            
-            # Create difference features
-            diff_features = combined_df - lag_features
-            
-            # Combine all features
-            all_features = pd.concat([
-                combined_df.iloc[-1:],  # Current features
-                lag_features.iloc[-1:],  # Lag features
-                diff_features.iloc[-1:]  # Difference features
-            ], axis=1)
-            
-            # Drop any NaN values using new methods
-            all_features = all_features.ffill().bfill()
-            
-            # Ensure we only use the features that match the model
-            feature_columns = []
-            for feature in self.base_features:
-                feature_columns.append(feature)
-                feature_columns.append(f"{feature}_lag1")
-                feature_columns.append(f"{feature}_diff")
-            
-            # Select only the features that match the model
-            all_features = all_features[feature_columns]
-            
-            return all_features.values
+        # Convert all columns to float and handle NaN values
+        current_df = current_df[available_features].astype(float)
+        current_df = current_df.ffill().bfill()
+        
+        # Get feature names from the model (using steer model as reference)
+        if self.current_track_type is None:
+            track_type = 'road'  # Default to road track
         else:
-            # If not enough history, return current features with zeros for temporal features
-            return current_df.values
+            track_type = self.current_track_type
+            
+        if self.model_trainer.models[track_type]['steer'] is not None:
+            expected_features = self.model_trainer.models[track_type]['steer'].feature_names_in_
+            # Ensure columns are in the same order as expected by the model
+            current_df = current_df[expected_features]
+        
+        return current_df.values
     
     def predict_controls(self, features):
         """Predict control actions using track-specific XGBoost models"""
@@ -184,23 +175,36 @@ class Driver(object):
         for action in ['steer', 'accel', 'brake']:
             if self.model_trainer.models[track_type][action] is not None:
                 try:
+                    # Get feature names from the model
+                    feature_names = self.model_trainer.models[track_type][action].feature_names_in_
+                    print(f"\nDebug - Model expects {len(feature_names)} features")
+                    print(f"Debug - Model feature names: {feature_names}")
+                    
+                    # Create DataFrame with correct feature names
+                    features_df = pd.DataFrame(features, columns=feature_names)
+                    
                     # Scale features using track-specific scaler
-                    features_scaled = self.model_trainer.scalers[track_type].transform(features)
+                    features_scaled = self.model_trainer.scalers[track_type].transform(features_df)
+                    
                     # Predict
                     pred = self.model_trainer.models[track_type][action].predict(features_scaled)[0]
                     
                     # Add safeguards for predictions
                     if action == 'steer':
-                        # Ensure minimum steering when off center
+                        # Get current track position and angle
                         track_pos = self.state.getTrackPos()
-                        if abs(track_pos) > 0.1:  # If car is not centered
-                            min_steer = 0.2  # Minimum steering amount
-                            if track_pos > 0:  # Car is to the right
-                                pred = min(pred, -min_steer)  # Steer left
-                            else:  # Car is to the left
-                                pred = max(pred, min_steer)   # Steer right
+                        angle = self.state.getAngle()
+                        
+                        # Calculate steering correction based on track position and angle
+                        position_correction = -track_pos * 0.5  # Steer more when further from center
+                        angle_correction = -angle * 0.3  # Steer more when angle is larger
+                        
+                        # Combine model prediction with corrections
+                        pred = pred + position_correction + angle_correction
+                        
                         # Clamp to valid range
                         pred = max(min(pred, 1.0), -1.0)
+                        
                     elif action == 'accel':
                         # Reduce acceleration when not well positioned
                         if abs(track_pos) > 0.5:

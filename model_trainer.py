@@ -43,7 +43,7 @@ class TORCSModelTrainer:
             return None
     
     def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Prepare feature set from raw data with temporal features"""
+        """Prepare feature set from raw data"""
         # Define base features
         base_features = [
             'Angle',              # Car's angle relative to track
@@ -63,26 +63,10 @@ class TORCSModelTrainer:
         df = df[available_features].astype(float)
         df = df.ffill().bfill()
         
-        # Create lag features (previous timestep)
-        lag_features = pd.DataFrame()
-        for col in available_features:
-            lag_features[f'{col}_lag1'] = df[col].shift(1)
-        
-        # Create difference features (current - previous)
-        diff_features = pd.DataFrame()
-        for col in available_features:
-            diff_features[f'{col}_diff'] = df[col] - df[col].shift(1)
-        
-        # Combine all features
-        all_features = pd.concat([df, lag_features, diff_features], axis=1)
-        
-        # Drop first row due to lag features
-        all_features = all_features.dropna()
-        
-        return all_features
+        return df
     
     def prepare_targets(self, df: pd.DataFrame) -> Dict[str, pd.Series]:
-        """Prepare target variables with synchronized alignment"""
+        """Prepare target variables"""
         # Map of internal names to CSV column names
         target_columns = {
             'steer': 'Steering',
@@ -96,10 +80,6 @@ class TORCSModelTrainer:
             targets[internal_name] = pd.to_numeric(df[csv_name], errors='coerce')
             targets[internal_name] = targets[internal_name].ffill().bfill()
         
-        # Drop first row to match features (due to lag features)
-        for name in targets:
-            targets[name] = targets[name].iloc[1:]
-        
         return targets
     
     def train_track_model(self, track_name: str, csv_path: str):
@@ -111,9 +91,28 @@ class TORCSModelTrainer:
             df = pd.read_csv(csv_path, low_memory=False)
             print(f"Loaded {len(df)} rows of data")
             
+            # Validate data
+            print("\nValidating data...")
+            print("Target value ranges:")
+            for col in ['Steering', 'Acceleration', 'Braking']:
+                if col in df.columns:
+                    print(f"{col}: min={df[col].min():.3f}, max={df[col].max():.3f}, mean={df[col].mean():.3f}")
+                else:
+                    print(f"Warning: {col} column not found in data")
+            
+            # Check for missing values
+            missing = df[['Steering', 'Acceleration', 'Braking']].isnull().sum()
+            print("\nMissing values in targets:")
+            print(missing)
+            
             # Prepare features and targets
             X = self.prepare_features(df)
             y = self.prepare_targets(df)
+            
+            print(f"\nFeature shape: {X.shape}")
+            print("Feature value ranges:")
+            for col in X.columns[:5]:  # Print first 5 features
+                print(f"{col}: min={X[col].min():.3f}, max={X[col].max():.3f}, mean={X[col].mean():.3f}")
             
             # Scale features using single scaler per track
             X_scaled = self.scalers[track_name].fit_transform(X)
@@ -128,29 +127,33 @@ class TORCSModelTrainer:
                     X_scaled, y[action], test_size=0.2, random_state=42
                 )
                 
+                print(f"Training set size: {len(X_train)}")
+                print(f"Test set size: {len(X_test)}")
+                print(f"Target distribution - min: {y_train.min():.3f}, max: {y_train.max():.3f}, mean: {y_train.mean():.3f}")
+                
                 # Initialize XGBoost model with improved parameters
                 model = xgb.XGBRegressor(
                     objective='reg:squarederror',
-                    n_estimators=1000,
-                    learning_rate=0.05,
-                    max_depth=10,
-                    min_child_weight=2,
+                    n_estimators=2000,
+                    learning_rate=0.01,
+                    max_depth=8,
+                    min_child_weight=3,
                     subsample=0.8,
                     colsample_bytree=0.8,
                     gamma=0.1,
                     reg_alpha=0.1,
                     reg_lambda=1.0,
                     random_state=42,
-                    early_stopping_rounds=50,
+                    early_stopping_rounds=100,
                     eval_metric=['rmse', 'mae']
                 )
                 
                 # Train with early stopping
-                eval_set = [(X_test, y_test)]
+                eval_set = [(X_train, y_train), (X_test, y_test)]
                 model.fit(
                     X_train, y_train,
                     eval_set=eval_set,
-                    verbose=False  # Disable verbose output
+                    verbose=True
                 )
                 
                 self.models[track_name][action] = model
@@ -168,16 +171,29 @@ class TORCSModelTrainer:
                 y_pred = model.predict(X_test)
                 mse = np.mean((y_test - y_pred) ** 2)
                 rmse = np.sqrt(mse)
-                print(f"{action} model RMSE: {rmse:.4f}")
+                mae = np.mean(np.abs(y_test - y_pred))
                 
-                # Print only top 3 important features
+                print(f"\nFinal model evaluation for {action}:")
+                print(f"RMSE: {rmse:.4f} (Target range: {y_test.min():.3f} to {y_test.max():.3f})")
+                print(f"MAE: {mae:.4f}")
+                print(f"Prediction range - min: {y_pred.min():.3f}, max: {y_pred.max():.3f}, mean: {y_pred.mean():.3f}")
+                
+                # Calculate and print error distribution
+                errors = y_test - y_pred
+                print(f"Error distribution:")
+                print(f"  Mean error: {errors.mean():.4f}")
+                print(f"  Std error: {errors.std():.4f}")
+                print(f"  Max positive error: {errors.max():.4f}")
+                print(f"  Max negative error: {errors.min():.4f}")
+                
+                # Print feature importance
                 feature_importance = pd.DataFrame({
                     'feature': X.columns,
                     'importance': model.feature_importances_
                 })
                 feature_importance = feature_importance.sort_values('importance', ascending=False)
-                print(f"Top 3 important features for {action}:")
-                print(feature_importance.head(3))
+                print(f"\nTop 5 important features for {action}:")
+                print(feature_importance.head(5))
                 
         except Exception as e:
             print(f"Error during model training for {track_name}: {str(e)}")
