@@ -28,9 +28,6 @@ class TORCSModel(nn.Module):
         self.batch_norm = nn.BatchNorm1d(hidden_size)
 
     def forward(self, x: torch.Tensor, track_edges: torch.Tensor) -> torch.Tensor:
-        print(f"Input x (other_features) shape: {x.shape}")  # Debug
-        print(f"Input track_edges shape: {track_edges.shape}")  # Debug
-
         # Process track edges with CNN
         track_edges = track_edges.unsqueeze(1)  # Add channel dimension: (batch, 1, 19)
         track_edges = self.relu(self.conv1(track_edges))  # (batch, 16, 19)
@@ -39,11 +36,9 @@ class TORCSModel(nn.Module):
         track_edges = self.pool(track_edges)  # (batch, 32, 4)
         track_edges = track_edges.view(track_edges.size(0), -1)  # (batch, 128)
         track_edges = self.relu(self.fc_track(track_edges))  # (batch, 32)
-        print(f"Processed track_edges shape: {track_edges.shape}")  # Debug
 
         # Combine with other features
         x = torch.cat((x, track_edges), dim=1)  # (batch, 44 + 32 = 76)
-        print(f"Combined features shape: {x.shape}")  # Debug
 
         # Fully connected layers
         x = self.relu(self.fc1(x))
@@ -170,6 +165,18 @@ class TORCSModelTrainer:
         X = df[available_features].values
         y = df[target_columns].values
 
+        # Scale steering values to -1.0 to 1.0 range
+        if 'steer' in df.columns:
+            steer_values = df['steer'].values
+            print(f"Original steering range: [{np.min(steer_values):.2f}, {np.max(steer_values):.2f}]")
+            # If steering values are not in -1 to 1 range, scale them
+            if np.min(steer_values) < -1.0 or np.max(steer_values) > 1.0:
+                steer_scale = max(abs(np.min(steer_values)), abs(np.max(steer_values)))
+                y[:, 0] = steer_values / steer_scale
+                print(f"Scaled steering range: [{np.min(y[:, 0]):.2f}, {np.max(y[:, 0]):.2f}]")
+            else:
+                y[:, 0] = steer_values
+
         X_scaled = self.scaler.fit_transform(X)
         joblib.dump(self.scaler, self.scaler_path)
 
@@ -179,10 +186,6 @@ class TORCSModelTrainer:
         """Train the model"""
         df = self.load_and_preprocess_data(csv_path)
         X, y, feature_names = self.prepare_features_and_targets(df)
-
-        print(f"Feature shape: {X.shape}")
-        print(f"Target shape: {y.shape}")
-        print(f"Feature names: {feature_names}")
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
@@ -211,8 +214,6 @@ class TORCSModelTrainer:
 
                 track_edges = batch_X[:, track_edge_indices]
                 other_features = batch_X[:, other_feature_indices]
-                print(f"other_features shape: {other_features.shape}")  # Should be (batch, 44)
-                print(f"track_edges shape: {track_edges.shape}")  # Should be (batch, 19)
 
                 self.optimizer.zero_grad()
                 outputs = self.model(other_features, track_edges)
