@@ -5,18 +5,15 @@ class CarState(object):
     Class that hold all the car state variables
     '''
 
-
     def __init__(self):
         '''Constructor'''
         self.parser = msgParser.MsgParser()
         self.sensors = None
         self.angle = None
         self.curLapTime = None
-        self.damage = None
         self.distFromStart = None
         self.distRaced = None
         self.focus = None
-        self.fuel = None
         self.gear = None
         self.lastLapTime = None
         self.opponents = None
@@ -30,17 +27,16 @@ class CarState(object):
         self.trackEdgeDist = None
         self.wheelSpinVel = None
         self.z = None
+        self.trackName = None
     
     def setFromMsg(self, str_sensors):
         self.sensors = self.parser.parse(str_sensors)
         
         self.setAngleD()
         self.setCurLapTimeD()
-        self.setDamageD()
         self.setDistFromStartD()
         self.setDistRacedD()
         self.setFocusD()
-        self.setFuelD()
         self.setGearD()
         self.setLastLapTimeD()
         self.setOpponentsD()
@@ -54,17 +50,16 @@ class CarState(object):
         self.setTrackEdgeDistD()
         self.setWheelSpinVelD()
         self.setZD()
+        self.setTrackNameD()
     
     def toMsg(self):
         self.sensors = {}
         
         self.sensors['angle'] = [self.angle]
         self.sensors['curLapTime'] = [self.curLapTime]
-        self.sensors['damage'] = [self.damage]
         self.sensors['distFromStart'] = [self.distFromStart]
         self.sensors['distRaced'] = [self.distRaced]
         self.sensors['focus'] = self.focus
-        self.sensors['fuel'] = [self.fuel]
         self.sensors['gear'] = [self.gear]
         self.sensors['lastLapTime'] = [self.lastLapTime]
         self.sensors['opponents'] = self.opponents
@@ -78,6 +73,7 @@ class CarState(object):
         self.sensors['trackEdgeDist'] = [self.trackEdgeDist]
         self.sensors['wheelSpinVel'] = self.wheelSpinVel
         self.sensors['z'] = [self.z]
+        self.sensors['trackName'] = [self.trackName]
         
         return self.parser.stringify(self.sensors)
     
@@ -135,15 +131,6 @@ class CarState(object):
     def getCurLapTime(self):
         return self.curLapTime
     
-    def setDamage(self, damage):
-        self.damage = damage
-    
-    def setDamageD(self):
-        self.damage = self.getFloatD('damage')
-        
-    def getDamage(self):
-        return self.damage
-    
     def setDistFromStart(self, distFromStart):
         self.distFromStart = distFromStart
     
@@ -167,15 +154,6 @@ class CarState(object):
     
     def setFocusD(self):
         self.focus = self.getFloatListD('focus')
-    
-    def setFuel(self, fuel):
-        self.fuel = fuel
-    
-    def setFuelD(self):
-        self.fuel = self.getFloatD('fuel')
-    
-    def getFuel(self):
-        return self.fuel
     
     def setGear(self, gear):
         self.gear = gear
@@ -293,5 +271,17 @@ class CarState(object):
     
     def getZ(self):
         return self.z
+    
+    def getTrackName(self):
+        return self.trackName
+    
+    def setTrackName(self, trackName):
+        self.trackName = trackName
+    
+    def setTrackNameD(self):
+        try:
+            self.trackName = self.sensors['trackName'][0]
+        except (KeyError, IndexError):
+            self.trackName = None
     
     

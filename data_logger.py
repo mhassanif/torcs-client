@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 
 class DataLogger:
-    def __init__(self, track_name, race_type):
+    def __init__(self, track_name, race_type, car_type='unknown'):
         # Create logs directory if it doesn't exist
         if not os.path.exists('logs'):
             os.makedirs('logs')
@@ -12,38 +12,38 @@ class DataLogger:
         # Use a single file for all races
         self.filename = 'logs/race_data.csv'
         
-        # Define CSV headers
+        # Define CSV headers - simplified based on new scope
         self.headers = [
             # Race information
             'timestamp', 'lap_number', 'lap_time', 'race_position',
             
-            # Car state
-            'speed_x', 'speed_y', 'speed_z', 'rpm', 'gear', 'fuel',
-            'angle', 'track_position', 'track_edge_dist',
+            # Car state (removed fuel and damage)
+            'SpeedX', 'SpeedY', 'SpeedZ', 'RPM', 'Gear',
+            'Angle', 'TrackPosition', 'track_edge_dist',
             
-            # Track sensors (19 values)
-            'track_sensor_0', 'track_sensor_1', 'track_sensor_2', 'track_sensor_3',
-            'track_sensor_4', 'track_sensor_5', 'track_sensor_6', 'track_sensor_7',
-            'track_sensor_8', 'track_sensor_9', 'track_sensor_10', 'track_sensor_11',
-            'track_sensor_12', 'track_sensor_13', 'track_sensor_14', 'track_sensor_15',
-            'track_sensor_16', 'track_sensor_17', 'track_sensor_18',
+            # Track sensors (19 values) - 1-based indexing
+            'Track_1', 'Track_2', 'Track_3', 'Track_4',
+            'Track_5', 'Track_6', 'Track_7', 'Track_8',
+            'Track_9', 'Track_10', 'Track_11', 'Track_12',
+            'Track_13', 'Track_14', 'Track_15', 'Track_16',
+            'Track_17', 'Track_18', 'Track_19',
             
-            # Opponent sensors (36 values)
-            'opponent_sensor_0', 'opponent_sensor_1', 'opponent_sensor_2', 'opponent_sensor_3',
-            'opponent_sensor_4', 'opponent_sensor_5', 'opponent_sensor_6', 'opponent_sensor_7',
-            'opponent_sensor_8', 'opponent_sensor_9', 'opponent_sensor_10', 'opponent_sensor_11',
-            'opponent_sensor_12', 'opponent_sensor_13', 'opponent_sensor_14', 'opponent_sensor_15',
-            'opponent_sensor_16', 'opponent_sensor_17', 'opponent_sensor_18', 'opponent_sensor_19',
-            'opponent_sensor_20', 'opponent_sensor_21', 'opponent_sensor_22', 'opponent_sensor_23',
-            'opponent_sensor_24', 'opponent_sensor_25', 'opponent_sensor_26', 'opponent_sensor_27',
-            'opponent_sensor_28', 'opponent_sensor_29', 'opponent_sensor_30', 'opponent_sensor_31',
-            'opponent_sensor_32', 'opponent_sensor_33', 'opponent_sensor_34', 'opponent_sensor_35',
+            # Opponent sensors (36 values) - 1-based indexing
+            'Opponent_1', 'Opponent_2', 'Opponent_3', 'Opponent_4',
+            'Opponent_5', 'Opponent_6', 'Opponent_7', 'Opponent_8',
+            'Opponent_9', 'Opponent_10', 'Opponent_11', 'Opponent_12',
+            'Opponent_13', 'Opponent_14', 'Opponent_15', 'Opponent_16',
+            'Opponent_17', 'Opponent_18', 'Opponent_19', 'Opponent_20',
+            'Opponent_21', 'Opponent_22', 'Opponent_23', 'Opponent_24',
+            'Opponent_25', 'Opponent_26', 'Opponent_27', 'Opponent_28',
+            'Opponent_29', 'Opponent_30', 'Opponent_31', 'Opponent_32',
+            'Opponent_33', 'Opponent_34', 'Opponent_35', 'Opponent_36',
             
             # Car control inputs
-            'accel', 'brake', 'steer', 'clutch',
+            'Acceleration', 'Braking', 'Steering', 'Clutch',
             
-            # Race metadata
-            'track_name', 'race_type', 'damage', 'distance_from_start', 'distance_raced',
+            # Race metadata (removed damage and fuel)
+            'track_name', 'race_type', 'car_type', 'DistanceFromStart', 'DistanceCovered',
             
             # Race session info
             'session_id', 'session_start_time'
@@ -58,6 +58,7 @@ class DataLogger:
         self.start_time = time.time()
         self.last_lap_time = 0
         self.current_lap = 0
+        self.car_type = car_type
         
         # Generate a unique session ID for this race
         self.session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -71,27 +72,31 @@ class DataLogger:
             self.current_lap += 1
             self.last_lap_time = car_state.getLastLapTime()
         
-        # Prepare row data
+        # Get sensor arrays
+        track_sensors = car_state.getTrack()
+        opponent_sensors = car_state.getOpponents()
+        
+        # Prepare row data - simplified based on new scope
         row_data = [
             # Race information
             current_time, self.current_lap, car_state.getLastLapTime(), car_state.getRacePos(),
             
-            # Car state
+            # Car state (removed fuel and damage)
             car_state.getSpeedX(), car_state.getSpeedY(), car_state.getSpeedZ(),
-            car_state.getRpm(), car_state.getGear(), car_state.getFuel(),
+            car_state.getRpm(), car_state.getGear(),
             car_state.getAngle(), car_state.getTrackPos(), car_state.getTrackEdgeDist(),
             
-            # Track sensors
-            *car_state.getTrack(),
+            # Track sensors - convert to 1-based indexing
+            *(track_sensors if track_sensors else [0] * 19),
             
-            # Opponent sensors
-            *car_state.getOpponents(),
+            # Opponent sensors - convert to 1-based indexing
+            *(opponent_sensors if opponent_sensors else [0] * 36),
             
             # Car control inputs
             car_control.getAccel(), car_control.getBrake(), car_control.getSteer(), car_control.getClutch(),
             
-            # Race metadata
-            track_name, race_type, car_state.getDamage(),
+            # Race metadata (removed damage and fuel)
+            track_name, race_type, self.car_type,
             car_state.getDistFromStart(), car_state.getDistRaced(),
             
             # Session info
